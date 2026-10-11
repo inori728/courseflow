@@ -1,0 +1,32 @@
+# —— 本地资料 / 工作文档（不发布；整理后再决定是否公开）——
+课程要求/
+本地素材/
+PROGRESS.md
+工作清单.md
+选题候选.md
+选题1-设计稿.md
+
+# —— Python ——
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.spec
+
+# —— 编辑器 / 系统 ——
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# —— 杂项 ——
+*.log
+*.tmp
