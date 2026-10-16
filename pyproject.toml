@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "courseflow"
+version = "0.1.0.dev0"
+description = "把课表变成壁纸,日历和挂图的课表工具(本地运行,不需要联网)"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.9"
+authors = [{ name = "yeqi" }]
+dependencies = [
+    "pillow>=9",
+    "openpyxl>=3.1",
+    "PyYAML>=6",
+]
+
+[project.urls]
+Repository = "https://gitee.com/yeqi728/courseflow"
+GitHub = "https://github.com/inori728/courseflow"
+
+[project.scripts]
+term = "courseflow.cli:main"
+
+[tool.setuptools]
+packages = ["courseflow"]
+
+[tool.setuptools.package-data]
+courseflow = ["data/*.yaml"]
