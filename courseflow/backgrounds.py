@@ -25,13 +25,13 @@ _ALIASES = {
 
 
 def normalize(name: str) -> str:
-    """把用户输入(中英文都行)归一成内置背景的代号;不认识的原样返回."""
+    """把用户输入(中英文都行)归一成内置背景的代号;无法识别的原样返回."""
     v = (name or "").strip()
     return _ALIASES.get(v, v.lower())
 
 
 def make_background(name: str, size: tuple[int, int] = (1920, 1080)) -> Image.Image:
-    """按名字生成一张背景图;不认识的名字一律用'黄昏晚霞'."""
+    """按名字生成一张背景图;无法识别的名字一律用'黄昏晚霞'."""
     W, H = size
     name = normalize(name)
     if name == "night":

@@ -1,9 +1,10 @@
-"""term 命令行入口--迭代 1 的四条命令:
+"""term 命令行入口--迭代 2 的五条命令:
 
     term demo             第一次用先跑这个:示例课表 + 一张壁纸
     term import 文件      从 Excel(.xlsx) / CSV 导入课表
     term paste            把剪贴板里的课表文字导进来
     term wallpaper        从课表源文件出壁纸(默认电脑版 + 手机版)
+    term check            给课表做一次校对:时间冲突 / 待完善 / 改动明细
 
 (也可以在仓库目录里用  python -m courseflow  跑同样的命令.)
 """
@@ -15,6 +16,7 @@ import sys
 from pathlib import Path
 
 from . import __version__
+from .audit import review
 from .backgrounds import BACKGROUNDS, normalize as normalize_bg
 from .model import SourceFileError, Timetable, load_source, save_source
 from .parsing import parse_pasted_text, parse_table_file, read_clipboard_text
@@ -32,6 +34,25 @@ def _print_courses(courses, limit: int = 8) -> None:
         print(f"   · {c.slot_text()} {c.name}{extra}{weeks}")
     if len(courses) > limit:
         print(f"   · ...等共 {len(courses)} 条")
+
+
+def _print_review(courses, notes=None) -> None:
+    """导入之后的校对小结(想全部展开就单独跑  term check)."""
+    rev = review(Timetable(courses=courses))
+    items = rev.conflicts + rev.issues
+    if items:
+        print(f"· 校对:发现 {len(items)} 处待确认")
+        for x in items[:3]:
+            print(f"   - {x}")
+        if len(items) > 3:
+            print(f"   - (还有 {len(items) - 3} 处,跑 term check 看全部)")
+    else:
+        print("· 校对:没发现明显问题")
+    notes = notes or []
+    for x in notes[:3]:
+        print(f"   ! 无法识别的格子:{x}")
+    if len(notes) > 3:
+        print(f"   ! (还有 {len(notes) - 3} 个格子无法识别)")
 
 
 def _write_source(tt: Timetable, target: Path) -> None:
@@ -99,23 +120,51 @@ def _import_common(courses, out_arg) -> int:
         except Exception:
             pass
     _write_source(tt, target)
-    print("· 下一步:term wallpaper 出一张看看;想改课表直接编辑这个文件")
+    print("· 下一步:term wallpaper 出一张看看;想改课表就直接改这个文件,改完可跑 term check 复查")
     return 0
 
 
 def cmd_import(args) -> int:
     print("= 从文件导入课表 =")
-    courses = parse_table_file(args.path)
+    notes: list[str] = []
+    courses = parse_table_file(args.path, notes)
     _print_courses(courses)
+    _print_review(courses, notes)
     return _import_common(courses, args.out)
 
 
 def cmd_paste(args) -> int:
     print("= 从剪贴板导入课表 =")
     text = read_clipboard_text()
-    courses = parse_pasted_text(text)
+    notes: list[str] = []
+    courses = parse_pasted_text(text, notes)
     _print_courses(courses)
+    _print_review(courses, notes)
     return _import_common(courses, args.out)
+
+
+def cmd_check(args) -> int:
+    print("= 课表校对 =")
+    source = Path(args.file or DEFAULT_SOURCE)
+    tt = load_source(source)
+    for w in tt.warnings:
+        print(f"   ! {w}")
+    print(f"· 读课表:{source}(共 {len(tt)} 条)")
+    rev = review(tt)
+    print(f"· 时间冲突:{len(rev.conflicts)} 处")
+    for x in rev.conflicts:
+        print(f"   - {x}")
+    print(f"· 待完善:{len(rev.issues)} 处")
+    for x in rev.issues:
+        print(f"   - {x}")
+    print(f"· 改动明细:{len(rev.changes)} 处")
+    for x in rev.changes:
+        print(f"   - {x}")
+    if rev.problem_count == 0:
+        print("√ 检查完:没发现明显问题")
+    else:
+        print("√ 检查完:上面这些请人工确认;改完课表再跑一遍本命令")
+    return 0
 
 
 def _add_render_flags(sp: argparse.ArgumentParser, with_file: bool = True) -> None:
@@ -151,6 +200,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("paste", help="把剪贴板里的课表文字导进来")
     sp.add_argument("-o", "--out", help="写入的课表源文件(默认 课表.yaml,旧文件自动备份 .bak)")
 
+    sp = sub.add_parser("check", help="给课表做一次校对:时间冲突 / 待完善 / 改动明细")
+    sp.add_argument("-f", "--file", help="课表源文件(默认 课表.yaml)")
+
     return p
 
 
@@ -167,7 +219,7 @@ def main(argv=None) -> int:
         key = normalize_bg(args.bg)
         if key not in BACKGROUNDS:
             options = ",".join(f"{k}({v})" for k, v in BACKGROUNDS.items())
-            print(f"× 不认识的背景:{args.bg}\n  可选:{options}")
+            print(f"× 无法识别的背景:{args.bg}\n  可选:{options}")
             return 1
         args.bg = key
 
@@ -180,6 +232,8 @@ def main(argv=None) -> int:
             return cmd_import(args)
         if args.cmd == "paste":
             return cmd_paste(args)
+        if args.cmd == "check":
+            return cmd_check(args)
     except (SourceFileError, ValueError) as exc:
         print(f"\n× 出错了:{exc}")
         return 1

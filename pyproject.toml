@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "courseflow"
-version = "0.1.0.dev0"
+version = "0.1.0"
 description = "把课表变成壁纸,日历和挂图的课表工具(本地运行,不需要联网)"
 readme = "README.md"
 license = "MIT"
@@ -12,7 +12,7 @@ license-files = ["LICENSE"]
 requires-python = ">=3.9"
 authors = [{ name = "yeqi" }]
 dependencies = [
-    "pillow>=9",
+    "pillow>=10.1",
     "openpyxl>=3.1",
     "PyYAML>=6",
 ]

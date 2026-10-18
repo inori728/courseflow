@@ -14,7 +14,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from .model import Course, parse_day, parse_periods
+from .model import Course, DAYS, parse_day, parse_periods
 
 # 周次文字:1-16周 / 第2周 / 4-11周 / 单周 / 双周 / 每周 ...
 WEEK_RE = re.compile(
@@ -68,14 +68,19 @@ def _tokenize_cell(cell: str) -> list[str]:
     return tokens
 
 
-def _parse_cell(cell: str) -> list[tuple[str, str, str]]:
+def _parse_cell(cell: str, notes: Optional[list[str]] = None,
+                label: str = "") -> list[tuple[str, str, str]]:
     """解析一个格子 → [(课名, 教室, 周次), ...].
 
     规则:连续的小词里,出现"周次"之后再冒出新的"非周次非教室"词,
     就认为开始写下一门课了(很多教务系统同一格塞两门课).
+
+    notes / label: 传入时,把"无法识别的内容"记进 notes(导入校对用).
     """
     tokens = _tokenize_cell(cell)
     if not tokens:
+        if notes is not None:
+            notes.append(f"{label} 里无法识别内容:'{str(cell).strip()[:16]}'")
         return []
 
     segments: list[list[str]] = [[]]
@@ -101,11 +106,16 @@ def _parse_cell(cell: str) -> list[tuple[str, str, str]]:
                 name_parts.append(t)
         if name_parts:
             result.append((" ".join(name_parts).strip(), room, weeks))
+        elif notes is not None:
+            notes.append(f"{label} 里有一段无法识别:'{' '.join(seg)[:16]}'(已跳过)")
     return result
 
 
-def parse_grid(rows: list[list]) -> list[Course]:
-    """rows = 二维表格(第一行一般是表头).认不出表头时抛 ValueError."""
+def parse_grid(rows: list[list], notes: Optional[list[str]] = None) -> list[Course]:
+    """rows = 二维表格(第一行一般是表头).无法识别表头时抛 ValueError.
+
+    notes: 传入一个列表时,把"无法识别的格子"这类校对提示追加进去(导入校对用).
+    """
     rows = [["" if c is None else str(c).strip() for c in r] for r in rows]
 
     header_i: Optional[int] = None
@@ -123,7 +133,7 @@ def parse_grid(rows: list[list]) -> list[Course]:
             break
 
     if header_i is None:
-        raise ValueError("没认出来课表格子--需要有一行表头写着'周一...周日'")
+        raise ValueError("无法识别课表格子--需要有一行表头写着'周一...周日'")
 
     first_day_col = min(day_cols.values())
     if first_day_col < 1:
@@ -141,13 +151,15 @@ def parse_grid(rows: list[list]) -> list[Course]:
         for day, col in day_cols.items():
             if col >= len(r) or not r[col]:
                 continue
-            for name, room, weeks in _parse_cell(r[col]):
+            span = f"{start}-{end}" if start != end else str(start)
+            label = f"{DAYS[day]} {span} 节"
+            for name, room, weeks in _parse_cell(r[col], notes, label):
                 courses.append(
                     Course(name=name, day=day, start=start,
                            end=min(end, 12), room=room, weeks=weeks)
                 )
     if not courses:
-        raise ValueError("表头认出来了,但格子里没找到课程内容")
+        raise ValueError("表头识别出来了,但格子里没找到课程内容")
     return courses
 
 
@@ -195,8 +207,8 @@ def _tsv_rows(text: str) -> list[list[str]]:
     return rows
 
 
-def parse_pasted_text(text: str) -> list[Course]:
-    """解析剪贴板里的'格子文字'."""
+def parse_pasted_text(text: str, notes: Optional[list[str]] = None) -> list[Course]:
+    """解析剪贴板里的'格子文字'.notes 见 parse_grid."""
     if not text or not text.strip():
         raise ValueError("剪贴板里没有文字.先选中课表,Ctrl+C 复制,再来运行这个命令")
 
@@ -215,40 +227,44 @@ def parse_pasted_text(text: str) -> list[Course]:
             new_rows.append(parts)
         rows = new_rows
 
-    return parse_grid(rows)
+    return parse_grid(rows, notes)
 
 
-def parse_table_file(path) -> list[Course]:
-    """从 .xlsx / .csv 文件读课表."""
+def parse_table_file(path, notes: Optional[list[str]] = None) -> list[Course]:
+    """从 .xlsx / .csv 文件读课表.notes 见 parse_grid."""
     p = Path(path)
     if not p.exists():
         raise ValueError(f"没找到文件:{p}")
     suffix = p.suffix.lower()
     if suffix in {".xlsx", ".xlsm"}:
-        return _parse_xlsx(p)
+        return _parse_xlsx(p, notes)
     if suffix == ".csv":
         with p.open(encoding="utf-8-sig", newline="") as f:
             rows = [r for r in csv.reader(f)]
-        return parse_grid(rows)
+        return parse_grid(rows, notes)
     raise ValueError(f"暂不支持这种文件:{suffix}(现在支持 .xlsx / .csv;"
                      f"Excel 也可以先选中表格'复制→粘贴')")
 
 
-def _parse_xlsx(p: Path) -> list[Course]:
+def _parse_xlsx(p: Path, notes: Optional[list[str]] = None) -> list[Course]:
     from openpyxl import load_workbook
 
     wb = load_workbook(p, data_only=True)
     best: Optional[list[Course]] = None
+    best_notes: Optional[list[str]] = None
     for ws in wb.worksheets:
         rows = [["" if v is None else str(v) for v in row] for row in ws.iter_rows(values_only=True)]
         try:
-            got = parse_grid(rows)
+            sheet_notes: list[str] = []
+            got = parse_grid(rows, sheet_notes)
         except ValueError:
             continue
         if best is None or len(got) > len(best):
-            best = got
+            best, best_notes = got, sheet_notes
     if best is None:
         raise ValueError("这个 Excel 里没找到课表格子(需要有一行表头写着'周一...周日')")
+    if notes is not None and best_notes:
+        notes.extend(best_notes)
     return best
 
 

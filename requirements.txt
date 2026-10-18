@@ -1,4 +1,4 @@
 # CourseFlow 运行依赖(详细安装方法见 README)
-pillow>=9
+pillow>=10.1
 openpyxl>=3.1
 PyYAML>=6
