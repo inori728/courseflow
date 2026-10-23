@@ -1,20 +1,18 @@
-"""课表校对:时间冲突,缺失信息,改动明细--全部本地,确定性计算,没有 AI.
+"""课表校对: 时间冲突, 缺失信息, 改动明细--全部本地, 确定性计算, 没有 AI.
 
-这个模块回答三个问题:
-- 哪两条课会"撞车"(同一天,节次重叠,周次也重叠)?
-- 哪些条目信息不全(缺教室 / 缺周次 / 周次无法识别 / 调整越界)?
-- 手动改过哪些地方(停课 / 调课 / 换教室的明细)?
+周次展开和 skip / changes 的处理统一交给 schedule.py; 这里只负责解释结果.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
-from .model import DAYS, Course, Timetable, parse_weekset
+from .model import DAYS, Timetable
+from .schedule import resolve_blocks
+from .weeks import parse_weeks
 
 
 def _fmt_weeks(weeks) -> str:
-    """把周次集合压成好读的文字:8-12 / 3,5,7 这类."""
+    """把周次集合压成好读的文字: 8-12 / 3,5,7 这类."""
     ws = sorted(weeks)
     if not ws:
         return ""
@@ -31,8 +29,6 @@ def _fmt_weeks(weeks) -> str:
     for a, b in runs:
         if a == b:
             parts.append(str(a))
-        elif b == a + 1:
-            parts.append(f"{a},{b}")
         else:
             parts.append(f"{a}-{b}")
     return ",".join(parts)
@@ -43,47 +39,33 @@ def _slot_text(day: int, start: int, end: int) -> str:
     return f"{DAYS[day]} {span} 节"
 
 
-def _occurrences(c: Course) -> list[tuple[int, int, int, Optional[set[int]]]]:
-    """把一条课拆成若干 (day, start, end, 周次集合或 None) 时段(处理停课 / 调整)."""
-    occ: list[tuple[int, int, int, Optional[set[int]]]] = []
-    weeks = parse_weekset(c.weeks) if c.weeks else None
-    if weeks is None:
-        occ.append((c.day, c.start, c.end, None))
-    else:
-        base = set(weeks)
-        base -= set(c.skip or [])
-        base -= {ch.week for ch in c.changes}
-        if base:
-            occ.append((c.day, c.start, c.end, base))
-    for ch in c.changes:
-        day = ch.day if ch.day is not None else c.day
-        st = ch.start if ch.start is not None else c.start
-        en = ch.end if ch.end is not None else c.end
-        occ.append((day, st, en, {ch.week}))
-    return occ
-
-
 def find_conflicts(tt: Timetable) -> list[str]:
-    """找出时间冲突(同一天 + 节次重叠 + 周次也重叠);返回给人看的文字列表."""
-    items = [(c, _occurrences(c)) for c in tt.courses]
+    """找出时间冲突(同一天 + 节次重叠 + 周次也重叠); 返回给人看的文字列表."""
+    items = [(c, resolve_blocks(c, total_weeks=tt.weeks_total)) for c in tt.courses]
     out: list[str] = []
     for i in range(len(items)):
-        a, oa = items[i]
+        a, blocks_a = items[i]
         for j in range(i + 1, len(items)):
-            b, ob = items[j]
-            for day1, s1, e1, w1 in oa:
-                for day2, s2, e2, w2 in ob:
-                    if day1 != day2 or s1 > e2 or s2 > e1:
+            b, blocks_b = items[j]
+            for block_a in blocks_a:
+                for block_b in blocks_b:
+                    if block_a.day != block_b.day:
                         continue
-                    if w1 is None or w2 is None:
+                    if block_a.start > block_b.end or block_b.start > block_a.end:
+                        continue
+                    if block_a.weeks is None or block_b.weeks is None:
                         weeks_txt = "周次无法确认"
                     else:
-                        inter = w1 & w2
+                        inter = block_a.weeks & block_b.weeks
                         if not inter:
                             continue
                         weeks_txt = f"第 {_fmt_weeks(inter)} 周"
-                    ov_s, ov_e = max(s1, s2), min(e1, e2)
-                    text = f"'{a.name}' × '{b.name}' {_slot_text(day1, ov_s, ov_e)}重叠({weeks_txt})"
+                    ov_s = max(block_a.start, block_b.start)
+                    ov_e = min(block_a.end, block_b.end)
+                    text = (
+                        f"'{a.name}' × '{b.name}' "
+                        f"{_slot_text(block_a.day, ov_s, ov_e)}重叠({weeks_txt})"
+                    )
                     if text not in out:
                         out.append(text)
     return out
@@ -99,7 +81,7 @@ def data_issues(tt: Timetable) -> list[str]:
         if not c.weeks:
             out.append(f"{label} 缺周次")
             continue
-        ws = parse_weekset(c.weeks)
+        ws = parse_weeks(c.weeks, total_weeks=tt.weeks_total)
         if ws is None:
             out.append(f"{label} 周次无法识别:'{c.weeks}'(冲突检测会按'周次无法确认'提示)")
             continue
@@ -113,7 +95,7 @@ def data_issues(tt: Timetable) -> list[str]:
 
 
 def changed_list(tt: Timetable) -> list[str]:
-    """手动改动的明细(停课 / 调整),给用户核对用."""
+    """手动改动的明细(停课 / 调整), 给用户核对用."""
     out: list[str] = []
     for c in tt.courses:
         for w in c.skip or []:

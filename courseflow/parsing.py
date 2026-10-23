@@ -15,20 +15,14 @@ from pathlib import Path
 from typing import Optional
 
 from .model import Course, DAYS, parse_day, parse_periods
-
-# 周次文字:1-16周 / 第2周 / 4-11周 / 单周 / 双周 / 每周 ...
-WEEK_RE = re.compile(
-    r"(第?\s*[0-9一二三四五六七八九十]+\s*[-\u2013\u2014~至]\s*[0-9一二三四五六七八九十]+\s*周)"
-    r"|(第?\s*[0-9一二三四五六七八九十]+\s*周)"
-    r"|(单周)|(双周)|(每周)|(全周)"
-)
+from .weeks import WEEK_EXPR_RE, looks_like_week_expression
 
 # 拆分"粘连词"时要剥掉的边缘字符(括号,标点等)
 _EDGE = "()（）[]【】{}<>《》·,，、;；:：… "
 
 
 def _is_week_text(t: str) -> bool:
-    return bool(WEEK_RE.search(t))
+    return looks_like_week_expression(t)
 
 
 def _looks_like_room(t: str) -> bool:
@@ -47,24 +41,24 @@ def _looks_like_room(t: str) -> bool:
     return False
 
 
+def _split_plain(text: str) -> list[str]:
+    return [t.strip(_EDGE) for t in text.split() if t.strip(_EDGE)]
+
+
 def _tokenize_cell(cell: str) -> list[str]:
-    """把格子文字切成小词;顺手把"粘连的周次"拆开,如 高等数学(1-16周)."""
+    """把格子文字切成小词, 并把完整周次(含单双周修饰)保留成一个词."""
     text = re.sub(r"[\uff1b;]", " ", str(cell).replace("\r", ""))
     tokens: list[str] = []
-    for t in text.split():
-        if t.strip(_EDGE) == "":
+    pos = 0
+    for m in WEEK_EXPR_RE.finditer(text):
+        if not looks_like_week_expression(m.group()):
             continue
-        m = WEEK_RE.search(t)
-        if m and m.group() != t:
-            head = t[: m.start()].strip().strip(_EDGE)
-            tail = t[m.end():].strip().strip(_EDGE)
-            if head:
-                tokens.append(head)
-            tokens.append(m.group())
-            if tail:
-                tokens.append(tail)
-        else:
-            tokens.append(t)
+        tokens.extend(_split_plain(text[pos:m.start()]))
+        week = "".join(m.group().split())
+        if week:
+            tokens.append(week)
+        pos = m.end()
+    tokens.extend(_split_plain(text[pos:]))
     return tokens
 
 
