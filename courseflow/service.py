@@ -12,6 +12,7 @@ from .ics import write_calendar
 from .model import Course, Timetable
 from .parsing import parse_pasted_text, parse_table_file, read_clipboard_text
 from .render import default_wallpaper_dir, render_to_files
+from .rules import HolidayReport, holiday_report
 from .source import load_source, save_source
 
 
@@ -104,6 +105,10 @@ def review_courses(courses: list[Course]) -> Review:
 
 def review_timetable(tt: Timetable) -> Review:
     return review(tt)
+
+
+def holiday_notices(tt: Timetable, year: Optional[int] = None) -> HolidayReport:
+    return holiday_report(tt, year=year)
 
 
 def render_wallpapers(tt: Timetable, out_dir=None, which: str = "both",

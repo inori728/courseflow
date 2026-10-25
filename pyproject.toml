@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "courseflow"
-version = "0.2.0"
+version = "0.3.0"
 description = "把课表变成壁纸,日历和挂图的课表工具(本地运行,不需要联网)"
 readme = "README.md"
 license = "MIT"
@@ -28,4 +28,4 @@ term = "courseflow.cli:main"
 packages = ["courseflow"]
 
 [tool.setuptools.package-data]
-courseflow = ["data/*.yaml"]
+courseflow = ["data/*.yaml", "data/*.json", "data/*.md"]

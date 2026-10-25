@@ -30,6 +30,11 @@ class CliTests(unittest.TestCase):
             self.assertEqual(rc, 1)
             self.assertFalse(out.exists())
 
+    def test_holidays_command(self):
+        sample = Path(__file__).resolve().parents[1] / "courseflow" / "data" / "示例课表.yaml"
+        rc = main(["holidays", "-f", str(sample)])
+        self.assertEqual(rc, 0)
+
     def test_check_strict_returns_one_on_conflict(self):
         with TemporaryDirectory() as tmp:
             src = Path(tmp) / "conflict.yaml"

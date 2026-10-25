@@ -1,6 +1,6 @@
 # CourseFlow（课程流）
 
-> 把课表变成你每天真的会看的东西：壁纸、日历、挂图。一个跑在自己电脑上的小工具，用 Python 写的。
+> 把课表变成你每天真的会看的东西：壁纸、日历、挂图。一个跑在自己电脑上的小工具。
 
 CourseFlow turns your class timetable into things you actually look at every day: wallpapers, calendar files, and posters.
 
@@ -21,7 +21,7 @@ CourseFlow turns your class timetable into things you actually look at every day
 
 ## 当前状态
 
-迭代 3 完成（2026-10）：单双周、连堂和 `.ics` 日历导出跑通；课表会按真实周次展开，停课 / 单次调课在日历里生效。壁纸、导入和校对沿用前两轮的能力。
+迭代 4 完成（2026-10）：新增 `term holidays`，按学期日期提醒法定节假日和调休上班日；只提醒，不自动改课表。单双周、连堂、`.ics` 日历、壁纸、导入和校对沿用前几轮能力。
 最新的进度和路线图都在 [Issues](https://github.com/inori728/courseflow/issues) 里。
 
 ## 路线图
@@ -32,13 +32,14 @@ CourseFlow turns your class timetable into things you actually look at every day
 - **迭代 1**：快速成型。示例课表 → 壁纸（电脑横屏 + 手机竖屏）跑通，Excel / 剪贴板导入也能用
 - **迭代 2**：手动微调与校对。导入自动出校对小结（`term check` 查时间冲突 / 缺信息）；停课、单次调课、换教室都能标
 - **迭代 3**：单双周 / 连堂 + `.ics` 日历。单双周按真实周次展开，停课 / 调课进入日历，支持课前提醒
+- **迭代 4**：调休引擎 + 放假提醒。内置 2026 年放假数据；`term holidays` 只提醒，不自动改课表
 
-接下来：调休规则 → 截图识别 → 图形界面 → 组队模式 → 收尾（打包 exe）
+接下来：截图识别 → 图形界面 → 组队模式 → 收尾（打包 exe）
 
 ## 选题意向
 
 - **问题**：课表工具其实有很多，但大多默认「你手上已经有一份电子课表」——现实里，很多人的课表躺在教务系统里导不出来，手上只有一张截图。所以我想做的是：**尽可能支持多种导入方式**（Excel、粘贴，以后还会加截图识别），把课表变成每天真的会看的东西（壁纸 / 日历 / 挂图），数据不出本机，顺手把组队找时间也解决。这个组合我没找到好用的。
-- **为什么开源**：这是《基础软件与开源系统》的课程项目，要求是公开维护一个学期。
+- **为什么开源**：这是《基础软件与开源系统》的课程项目。
 - **可能的扩展点**：适配更多学校的课表格式、更多输出玩法，组队和日历这块也还能再顺一些。
 
 ## 怎么运行
@@ -74,9 +75,14 @@ python -m courseflow check
 
 # 导出 .ics 日历（默认课前 15 分钟提醒；--remind 0 关闭）
 python -m courseflow calendar
+
+# 放假 / 调休提醒（只提醒，不会自动改课表）
+python -m courseflow holidays
 ```
 
 `calendar` 默认把 `.ics` 放到「桌面\课表.ics」，也可以加 `-o 路径` 指定文件。导出前需要课表里有学期起始日期和节次时间，示例课表已经带好，见下面的源文件说明。
+
+`holidays` 会按学期起始日期找出内置的法定节假日和调休上班日，列出原课表里可能受影响的课程；它只提醒，不会自动写 `skip` / `changes`。目前内置 2026 年数据（来源 holiday-cn，MIT 许可）。
 
 生成出来的 `课表.yaml` 就是你的课表——普通文本文件，用记事本打开就能改，改完重跑一次 `wallpaper` 就更新了。
 

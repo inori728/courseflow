@@ -1,4 +1,4 @@
-"""term 命令行入口--迭代 3 的六条命令:
+"""term 命令行入口--迭代 4 的七条命令:
 
     term demo             第一次用先跑这个:示例课表 + 一张壁纸
     term import 文件      从 Excel(.xlsx) / CSV 导入课表
@@ -6,6 +6,7 @@
     term wallpaper        从课表源文件出壁纸(默认电脑版 + 手机版)
     term check            给课表做一次校对:时间冲突 / 待完善 / 改动明细
     term calendar         导出 .ics 日历(单双周 / 停课 / 调课生效)
+    term holidays         提醒法定节假日 / 调休上班日(只提醒,不改课表)
 
 (也可以在仓库目录里用  python -m courseflow  跑同样的命令.)
 """
@@ -146,6 +147,13 @@ def cmd_check(args) -> int:
     print(f"· 改动明细:{len(rev.changes)} 处")
     for x in rev.changes:
         print(f"   - {x}")
+    holidays = service.holiday_notices(tt)
+    for w in holidays.warnings:
+        print(f"   ! {w}")
+    if holidays.notices:
+        print(f"· 放假 / 调休提醒:{len(holidays.notices)} 条")
+        for line in holidays.lines():
+            print(f"   {line}")
     if rev.problem_count == 0:
         print("√ 检查完:没发现明显问题")
     else:
@@ -166,6 +174,25 @@ def cmd_calendar(args) -> int:
         tt, out=args.out, reminder_minutes=args.remind,
     )
     print(f"√ 完成!日历文件在:{path}")
+    return 0
+
+
+def cmd_holidays(args) -> int:
+    print("= 放假 / 调休提醒 =")
+    source = Path(args.file or DEFAULT_SOURCE)
+    tt = service.load_timetable(source)
+    for w in tt.warnings:
+        print(f"   ! {w}")
+    print(f"· 读课表:{source}(共 {len(tt)} 条)")
+    report = service.holiday_notices(tt, year=args.year)
+    for w in report.warnings:
+        print(f"   ! {w}")
+    if report.notices:
+        for line in report.lines():
+            print(f"   {line}")
+    else:
+        print("· 没有需要提醒的放假日或调休日")
+    print("√ 提醒只做提示,不会自动修改课表;确认后用 skip / changes 手动调整")
     return 0
 
 
@@ -213,6 +240,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--remind", type=int, default=15,
                     help="课前提醒分钟数,0=不提醒(默认 15)")
 
+    sp = sub.add_parser("holidays", help="提醒法定节假日 / 调休上班日(只提醒,不改课表)")
+    sp.add_argument("-f", "--file", help="课表源文件(默认 课表.yaml)")
+    sp.add_argument("--year", type=int, help="指定年份(默认按学期起始日期推断)")
+
     return p
 
 
@@ -246,6 +277,8 @@ def main(argv=None) -> int:
             return cmd_check(args)
         if args.cmd == "calendar":
             return cmd_calendar(args)
+        if args.cmd == "holidays":
+            return cmd_holidays(args)
     except (SourceFileError, ValueError) as exc:
         print(f"\n× 出错了:{exc}")
         return 1
