@@ -100,6 +100,16 @@ class SharedAITests(unittest.TestCase):
                     recognize_image(Path(folder) / "missing.png", client)
             probe.assert_not_called()
 
+    def test_completed_background_probe_does_not_overwrite_new_settings(self):
+        from courseflow import service
+        original = config()
+        changed = config()
+        changed.model = "user-changed-model"
+        with patch("courseflow.service.ai_settings", return_value=changed), \
+                patch("courseflow.service.save_ai_settings") as save:
+            with patch("courseflow.ai.AIClient.test_vision", side_effect=lambda: setattr(original, "verified_signature", original.signature)):
+                service.test_ai(original)
+        save.assert_not_called()
 
     def test_tiled_recognition_retains_completed_parts_after_a_failed_tile(self):
         first = {"name": "数学", "day": "周一", "periods": "1-2", "weeks": "1-16周"}

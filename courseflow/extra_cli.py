@@ -245,3 +245,5 @@ def register(sub):
     p.add_argument("draft")
     p.add_argument("--confirm", action="store_true", required=True)
     p.add_argument("-o", "--out", default="课表.yaml")
+    p = parser("gui", "打开三步图形界面", gui)
+    file_flag(p)
