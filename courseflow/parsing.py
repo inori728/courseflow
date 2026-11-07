@@ -224,12 +224,26 @@ def parse_pasted_text(text: str, notes: Optional[list[str]] = None) -> list[Cour
     return parse_grid(rows, notes)
 
 
-def parse_table_file(path, notes: Optional[list[str]] = None) -> list[Course]:
+def parse_table_file(path, notes: Optional[list[str]] = None, adapter: Optional[dict] = None) -> list[Course]:
     """从 .xlsx / .csv 文件读课表.notes 见 parse_grid."""
     p = Path(path)
     if not p.exists():
         raise ValueError(f"没找到文件:{p}")
     suffix = p.suffix.lower()
+    if adapter is not None:
+        if suffix in {".xlsx", ".xlsm"}:
+            from openpyxl import load_workbook
+            wb = load_workbook(p, data_only=True, read_only=True)
+            try:
+                sheet = wb[adapter["sheet"]] if adapter.get("sheet") else wb.active
+                rows = [list(row) for row in sheet.iter_rows(values_only=True)]
+                return parse_mapped_rows(rows, adapter, notes)
+            finally:
+                wb.close()
+        if suffix == ".csv":
+            with p.open(encoding="utf-8-sig", newline="") as stream:
+                return parse_mapped_rows(list(csv.reader(stream)), adapter, notes)
+        raise ValueError("格式适配配置仅用于 Excel / CSV.")
     if suffix in {".xlsx", ".xlsm"}:
         return _parse_xlsx(p, notes)
     if suffix == ".csv":
@@ -238,6 +252,44 @@ def parse_table_file(path, notes: Optional[list[str]] = None) -> list[Course]:
         return parse_grid(rows, notes)
     raise ValueError(f"暂不支持这种文件:{suffix}(现在支持 .xlsx / .csv;"
                      f"Excel 也可以先选中表格'复制→粘贴')")
+
+
+def parse_mapped_rows(rows: list[list], adapter: dict, notes=None) -> list[Course]:
+    """A school adapter maps record columns, without executing Python code."""
+    if not isinstance(adapter, dict) or adapter.get("format", "records") != "records":
+        raise ValueError("适配配置 format 应为 records.")
+    try:
+        header_row = int(adapter.get("header_row", 1)) - 1
+        mapping = adapter["columns"]
+        if header_row < 0 or not isinstance(mapping, dict):
+            raise ValueError("invalid mapping")
+        headers = [str(value or "").strip() for value in rows[header_row]]
+        indexes = {}
+        for field in ("name", "day", "periods", "weeks", "room"):
+            column = mapping.get(field)
+            if column is None and field in {"weeks", "room"}:
+                continue
+            index = column - 1 if isinstance(column, int) and not isinstance(column, bool) else headers.index(str(column))
+            if not 0 <= index < len(headers):
+                raise ValueError("invalid column")
+            indexes[field] = index
+    except (ValueError, KeyError, IndexError, TypeError) as exc:
+        raise ValueError("适配配置与文件表头不匹配, 请检查 header_row 和 columns.") from exc
+    result = []
+    for number, row in enumerate(rows[header_row + 1:], header_row + 2):
+        fields = {key: str(row[index] or "").strip() if index < len(row) else "" for key, index in indexes.items()}
+        if not any(fields.values()):
+            continue
+        day = parse_day(fields.get("day", ""))
+        span = parse_periods(fields.get("periods", ""))
+        if not fields.get("name") or day is None or span is None or not 1 <= span[0] <= span[1] <= 12:
+            if notes is not None:
+                notes.append(f"第 {number} 行无法确认课程, 星期或节次, 请人工补充.")
+            continue
+        result.append(Course(fields["name"], day, span[0], span[1], fields.get("room", ""), fields.get("weeks", "")))
+    if not result:
+        raise ValueError("没有导入有效课程, 请检查格式适配配置.")
+    return result
 
 
 def _parse_xlsx(p: Path, notes: Optional[list[str]] = None) -> list[Course]:

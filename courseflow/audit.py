@@ -7,7 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .model import DAYS, Timetable
-from .schedule import resolve_blocks
+from .schedule import resolve_blocks, resolve_course
 from .weeks import parse_weeks
 
 
@@ -39,10 +39,39 @@ def _slot_text(day: int, start: int, end: int) -> str:
     return f"{DAYS[day]} {span} 节"
 
 
+def conflict_signatures(tt: Timetable) -> set[tuple]:
+    """Compare actual collisions, so removing one week never creates a false new conflict."""
+    entries = [(index, occ) for index, course in enumerate(tt.courses)
+               for occ in resolve_course(course, tt.weeks_total)]
+    result = set()
+    for index, (first_index, first) in enumerate(entries):
+        for second_index, second in entries[index + 1:]:
+            if first.day != second.day or (first.week is not None and second.week is not None and first.week != second.week):
+                continue
+            start, end = max(first.start, second.start), min(first.end, second.end)
+            if start <= end:
+                result.add((first_index, first.source_week, second_index, second.source_week,
+                            first.week, second.week, first.day, start, end))
+    return result
+
+
 def find_conflicts(tt: Timetable) -> list[str]:
     """找出时间冲突(同一天 + 节次重叠 + 周次也重叠); 返回给人看的文字列表."""
     items = [(c, resolve_blocks(c, total_weeks=tt.weeks_total)) for c in tt.courses]
     out: list[str] = []
+    # A cross-week move can collide with another occurrence of the same course.
+    for course in tt.courses:
+        occurrences = resolve_course(course, total_weeks=tt.weeks_total)
+        for index, first in enumerate(occurrences):
+            for second in occurrences[index + 1:]:
+                if first.week is None or first.week != second.week or first.day != second.day:
+                    continue
+                start, end = max(first.start, second.start), min(first.end, second.end)
+                if start <= end:
+                    text = (f"'{course.name}' 的两次课 "
+                            f"{_slot_text(first.day, start, end)}重叠(第 {first.week} 周)")
+                    if text not in out:
+                        out.append(text)
     for i in range(len(items)):
         a, blocks_a = items[i]
         for j in range(i + 1, len(items)):
@@ -85,6 +114,8 @@ def data_issues(tt: Timetable) -> list[str]:
         if ws is None:
             out.append(f"{label} 周次无法识别:'{c.weeks}'(冲突检测会按'周次无法确认'提示)")
             continue
+        if any(w < 1 or w > tt.weeks_total for w in ws):
+            out.append(f"{label} 课程周次超出学期范围(1-{tt.weeks_total}周)")
         for w in c.skip or []:
             if w not in ws:
                 out.append(f"{label} 停课周次 {w} 不在课程周次内")

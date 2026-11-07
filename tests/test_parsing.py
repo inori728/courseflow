@@ -5,8 +5,8 @@ from courseflow.parsing import _parse_cell, _tokenize_cell, parse_grid
 
 class CellParsingTests(unittest.TestCase):
     def test_parenthesized_single_week_is_not_a_course(self):
-        parsed = _parse_cell("高等数学 1-16周（单） 教一A101")
-        self.assertEqual(parsed, [("高等数学", "教一A101", "1-16周（单）")])
+        parsed = _parse_cell("高等数学 1-16周\uff08单\uff09 教一A101")
+        self.assertEqual(parsed, [("高等数学", "教一A101", "1-16周\uff08单\uff09")])
 
     def test_space_separated_single_week_keeps_modifier(self):
         parsed = _parse_cell("高等数学 1-16周 单周 教一A101")

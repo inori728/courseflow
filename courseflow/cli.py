@@ -77,6 +77,10 @@ def _run_wallpaper(source: Path, args) -> int:
 
     results = service.render_wallpapers(
         tt, out_dir=args.out, which=args.size, background=normalize_bg(args.bg),
+        week=args.week, theme=args.theme, bg_image=args.bg_image,
+        block_alpha=args.alpha, blur=args.blur, brightness=args.brightness,
+        top_safe=args.top_safe, bottom_safe=args.bottom_safe,
+        text_mode=args.text_mode,
     )
     for path, size in results:
         print(f"· 出图:{path.name}({size[0]}×{size[1]})")
@@ -116,7 +120,11 @@ def _import_common(courses, out_arg) -> int:
 
 def cmd_import(args) -> int:
     print("= 从文件导入课表 =")
-    courses, notes = service.import_table(args.path)
+    if Path(args.path).suffix.lower() in {".txt", ".tsv", ".docx", ".pdf"}:
+        courses, notes = service.import_document(args.path)
+    else:
+        adapter = service.load_adapter(args.adapter) if args.adapter else None
+        courses, notes = service.import_table(args.path, adapter)
     _print_courses(courses)
     _print_review(courses, notes)
     return _import_common(courses, args.out)
@@ -205,12 +213,21 @@ def _add_render_flags(sp: argparse.ArgumentParser, with_file: bool = True) -> No
                     help="内置背景:dusk 黄昏晚霞(默认)/ night 深夜星河 / sea 海盐渐变 / purple 暮紫渐变")
     sp.add_argument("-o", "--out", help="输出文件夹(默认:桌面\\课表壁纸)")
     sp.add_argument("--no-open", action="store_true", help="出图后不自动打开文件夹")
+    sp.add_argument("--week", type=int, help="仅显示这一周的实际安排")
+    sp.add_argument("--theme", choices=["dark", "light", "paper"], default="dark")
+    sp.add_argument("--bg-image", help="自定义背景图片")
+    sp.add_argument("--alpha", type=int, default=190)
+    sp.add_argument("--blur", type=float, default=6.0)
+    sp.add_argument("--brightness", type=float, default=.62)
+    sp.add_argument("--top-safe", type=float, default=0.0)
+    sp.add_argument("--bottom-safe", type=float, default=0.0)
+    sp.add_argument("--text-mode", choices=["white", "auto"], default="auto")
 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="term",
-        description="CourseFlow 课表工具:把课表变成壁纸(本地运行,不需要联网)",
+        description="CourseFlow 课表工具:本地课表, 壁纸, 日历, 挂图与组队, AI 功能按需联网",
     )
     p.add_argument("--version", action="version", version=f"CourseFlow {__version__}")
     sub = p.add_subparsers(dest="cmd", metavar="命令")
@@ -224,6 +241,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("import", help="从 Excel(.xlsx) / CSV 导入课表")
     sp.add_argument("path", help="要导入的文件路径")
+    sp.add_argument("--adapter", help="学校格式适配 YAML 配置")
     sp.add_argument("-o", "--out", help="写入的课表源文件(默认 课表.yaml,旧文件自动备份 .bak)")
 
     sp = sub.add_parser("paste", help="把剪贴板里的课表文字导进来")
@@ -244,13 +262,27 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("-f", "--file", help="课表源文件(默认 课表.yaml)")
     sp.add_argument("--year", type=int, help="指定年份(默认按学期起始日期推断)")
 
+    from .extra_cli import register
+    register(sub)
     return p
 
 
 def main(argv=None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    values = list(sys.argv[1:] if argv is None else argv)
+    if values and values[0].startswith("第") and values[0].endswith("周"):
+        from .weeks import parse_weeks
+        weeks = parse_weeks(values[0])
+        if weeks and len(weeks) == 1:
+            values = ["week", "--week", str(next(iter(weeks)))] + values[1:]
+    args = parser.parse_args(values)
     if not args.cmd:
+        if DEFAULT_SOURCE.exists():
+            try:
+                print(service.agenda(service.load_timetable(DEFAULT_SOURCE)))
+                return 0
+            except ValueError:
+                pass
         parser.print_help()
         print("\n提示:第一次用先跑  term demo")
         return 0
@@ -265,6 +297,8 @@ def main(argv=None) -> int:
         args.bg = key
 
     try:
+        if hasattr(args, "handler"):
+            return args.handler(args)
         if args.cmd == "demo":
             return cmd_demo(args)
         if args.cmd == "wallpaper":
@@ -279,7 +313,7 @@ def main(argv=None) -> int:
             return cmd_calendar(args)
         if args.cmd == "holidays":
             return cmd_holidays(args)
-    except (SourceFileError, ValueError) as exc:
+    except (SourceFileError, ValueError, OSError) as exc:
         print(f"\n× 出错了:{exc}")
         return 1
     return 0

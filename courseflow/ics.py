@@ -58,6 +58,8 @@ def _uid(term: str, occ: Occurrence) -> str:
     raw = "|".join([
         term, occ.name, str(occ.week), str(occ.day),
         str(occ.start), str(occ.end), occ.room,
+        str(occ.source_week), str(occ.course.day),
+        str(occ.course.start), str(occ.course.end),
     ])
     return f"{sha1(raw.encode('utf-8')).hexdigest()[:20]}@courseflow"
 
@@ -119,7 +121,7 @@ def build_calendar(tt: Timetable, reminder_minutes: int = 15,
             else:
                 occurrences.append(occ)
     if unknown:
-        names = "、".join(dict.fromkeys(unknown))
+        names = ", ".join(dict.fromkeys(unknown))
         raise CalendarError(f"这些课程周次无法识别, 请先修正: {names}")
 
     occurrences.sort(key=lambda o: (o.week, o.day, o.start, o.name))

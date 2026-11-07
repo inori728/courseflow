@@ -15,7 +15,8 @@ from typing import Optional
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageStat
 
 from .backgrounds import make_background
-from .model import DAYS, Timetable
+from .model import Course, DAYS, Timetable
+from .schedule import resolve_timetable
 
 REF_W = 1920                      # 参考稿宽度,其他尺寸按它等比缩放
 BLOCK_ALPHA = 190                 # 课块不透明度(C 方案定稿值)
@@ -128,12 +129,13 @@ def _cover(img: Image.Image, size: tuple[int, int]) -> Image.Image:
     return img2.crop((x, y, x + W, y + H))
 
 
-def _prepare_bg(size: tuple[int, int], background: str, bg_image=None, k: float = 1.0) -> Image.Image:
+def _prepare_bg(size: tuple[int, int], background: str, bg_image=None, k: float = 1.0,
+                blur: float = 6.0, brightness: float = 0.62) -> Image.Image:
     if bg_image is not None:
         src = Image.open(bg_image).convert("RGB")
         bg = _cover(src, size)
-        bg = bg.filter(ImageFilter.GaussianBlur(max(2.0, 6 * k)))
-        bg = ImageEnhance.Brightness(bg).enhance(0.62)
+        bg = bg.filter(ImageFilter.GaussianBlur(max(0.0, blur * k)))
+        bg = ImageEnhance.Brightness(bg).enhance(brightness)
         return bg
     return make_background(background, size)
 
@@ -181,13 +183,34 @@ def _layout_name(d: ImageDraw.ImageDraw, text: str, max_w: float,
 
 def render_wallpaper(tt: Timetable, size=(1920, 1080), background: str = "dusk",
                      bg_image=None, block_alpha: int = BLOCK_ALPHA,
-                     text_mode: str = "white") -> Image.Image:
+                     text_mode: str = "white", week: Optional[int] = None,
+                     theme: str = "dark", blur: float = 6.0, brightness: float = 0.62,
+                     top_safe: float = 0.0, bottom_safe: float = 0.0) -> Image.Image:
     """把一张课表渲染成图片(返回 PIL Image,不落盘).
 
     block_alpha:课块不透明度(0~255),默认 190(预研 C 方案定稿值).
     text_mode:white = 统一白字(默认,色块整体压深一点保对比);auto = 字色随背景亮度自适应.
     """
     W, H = size
+    if W < 640 or H < 480:
+        raise ValueError("图片尺寸至少为 640x480.")
+    if theme not in {"dark", "light", "paper"}:
+        raise ValueError("主题应为 dark / light / paper.")
+    if week is not None and not 1 <= week <= tt.weeks_total:
+        raise ValueError("周次超出学期范围.")
+    if not 0 <= top_safe <= .3 or not 0 <= bottom_safe <= .3:
+        raise ValueError("安全边距比例应在 0-0.3 之间.")
+    courses = tt.sorted_courses()
+    unknown = False
+    if week is not None:
+        courses = []
+        for occ in resolve_timetable(tt, tt.weeks_total):
+            if occ.week not in {None, week}:
+                continue
+            unknown = unknown or occ.week is None
+            courses.append(Course(occ.name, occ.day, occ.start, occ.end, occ.room,
+                                  "周次待确认" if occ.week is None else f"第 {week} 周"))
+        courses.sort(key=lambda c: (c.day, c.start, c.name))
     k = W / REF_W
 
     def s(v: float, lo: int) -> int:
@@ -195,8 +218,9 @@ def render_wallpaper(tt: Timetable, size=(1920, 1080), background: str = "dusk",
         return max(int(round(v * k)), lo)
 
     margin = s(90, 24)
-    top = s(150, 68)
-    bottom = s(70, 40)
+    safe = int(H * top_safe)
+    top = s(150, 68) + safe
+    bottom = s(70, 40) + int(H * bottom_safe)
     gutter = s(64, 30)
 
     f_title = load_font(s(34, 24), True)
@@ -204,17 +228,25 @@ def render_wallpaper(tt: Timetable, size=(1920, 1080), background: str = "dusk",
     f_day = load_font(s(24, 16), True)
     f_row = load_font(s(18, 12))
 
-    bg = _prepare_bg(size, background, bg_image, k)
+    bg = _prepare_bg(size, background, bg_image, k, blur, brightness)
+    light = theme in {"light", "paper"}
+    if light:
+        base = Image.new("RGB", (W, H), "#ffffff" if theme == "paper" else "#f1f5ff")
+        bg = base if theme == "paper" else Image.blend(bg, base, .88)
+    heading = (24, 35, 57, 255) if light else (255, 255, 255, 255)
+    secondary = (89, 105, 128, 255) if light else (255, 255, 255, 232)
 
     ov = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     d = ImageDraw.Draw(ov)
 
     # -- 顶部:标题 + 一行小字 --
     today = datetime.now().strftime("%Y-%m-%d")
-    title = f"{tt.term} · 我的课表" if tt.term else "我的课表"
-    d.text((margin, s(46, 22)), title, font=f_title, fill=(255, 255, 255, 255))
-    d.text((margin, s(98, 50)), f"共 {len(tt)} 条课程 · 由 CourseFlow 生成 · {today}",
-           font=f_sub, fill=(255, 255, 255, 232))
+    view = f"第 {week} 周" if week is not None else "学期总览"
+    title = f"{tt.term} · {view}" if tt.term else f"我的课表 · {view}"
+    d.text((margin, safe + s(46, 22)), title, font=f_title, fill=heading)
+    suffix = " · 含周次待确认课程" if unknown else ""
+    d.text((margin, safe + s(98, 50)), f"共 {len(courses)} 条安排 · CourseFlow · {today}{suffix}",
+           font=f_sub, fill=secondary)
 
     # -- 表格区 --
     grid_x0 = margin + gutter
@@ -231,28 +263,30 @@ def render_wallpaper(tt: Timetable, size=(1920, 1080), background: str = "dusk",
 
     d.rounded_rectangle(
         [margin - s(6, 3), top - s(6, 3), W - margin + s(16, 8), grid_y1 + s(16, 8)],
-        radius=s(18, 8), fill=(255, 255, 255, 30),
+        radius=s(18, 8), fill=(255, 255, 255, 160 if light else 30),
     )
     for i, day in enumerate(DAYS):
         cx = grid_x0 + i * col_w + col_w / 2
         bbox = d.textbbox((0, 0), day, font=f_day)
         d.text((cx - (bbox[2] - bbox[0]) / 2, top + s(8, 4)), day,
-               font=f_day, fill=(255, 255, 255, 255))
+               font=f_day, fill=heading)
     for r in range(12):
         y = grid_y0 + r * row_h
         bbox = d.textbbox((0, 0), str(r + 1), font=f_row)
         d.text((margin + gutter / 2 - (bbox[2] - bbox[0]) / 2,
                 y + row_h / 2 - (bbox[3] + bbox[1]) / 2), str(r + 1),
-               font=f_row, fill=(255, 255, 255, 220))
-        d.line([(grid_x0, y), (grid_x1, y)], fill=(255, 255, 255, line_a), width=1)
-    d.line([(grid_x0, grid_y1), (grid_x1, grid_y1)], fill=(255, 255, 255, line_a), width=1)
+               font=f_row, fill=secondary)
+        d.line([(grid_x0, y), (grid_x1, y)], fill=(100, 120, 153, 70) if light else (255, 255, 255, line_a), width=1)
+    d.line([(grid_x0, grid_y1), (grid_x1, grid_y1)], fill=(100, 120, 153, 70) if light else (255, 255, 255, line_a), width=1)
     for i in range(8):
         x = grid_x0 + i * col_w
-        d.line([(x, grid_y0), (x, grid_y1)], fill=(255, 255, 255, line_a), width=1)
+        d.line([(x, grid_y0), (x, grid_y1)], fill=(100, 120, 153, 70) if light else (255, 255, 255, line_a), width=1)
 
     # -- 课块 --(同名课用同一种颜色)
-    courses = tt.sorted_courses()
     palette = COLORS
+    if light:
+        palette = [tuple(int(v * .25 + 255 * .75) for v in c) for c in COLORS]
+        text_mode = "auto"
     if text_mode == "white":  # 统一白字时,把色块整体压深一点,保证对比
         palette = [tuple(int(v * 0.80) for v in c) for c in COLORS]
     color_of = {
@@ -263,11 +297,12 @@ def render_wallpaper(tt: Timetable, size=(1920, 1080), background: str = "dusk",
     a = block_alpha / 255.0
     center_text = H >= W * 1.5  # 竖屏(手机)版:块很高,文字垂直居中更好看
 
-    for c in courses:
+    for course_index, c in enumerate(courses):
         # 同格多课 → 左右分栏
-        same = [o for o in courses if o.day == c.day and not (o.end < c.start or c.end < o.start)]
-        same_sorted = sorted(same, key=lambda o: (o.start, o.name))
-        lane = same_sorted.index(c)
+        same = [(index, other) for index, other in enumerate(courses)
+                if other.day == c.day and not (other.end < c.start or c.end < other.start)]
+        same_sorted = sorted(same, key=lambda item: (item[1].start, item[1].name, item[0]))
+        lane = next(index for index, item in enumerate(same_sorted) if item[0] == course_index)
         n = len(same_sorted)
 
         colx = grid_x0 + c.day * col_w
@@ -330,7 +365,8 @@ def render_wallpaper(tt: Timetable, size=(1920, 1080), background: str = "dusk",
 
 def render_to_files(tt: Timetable, out_dir=None, which: str = "both",
                     background: str = "dusk", bg_image=None,
-                    block_alpha: int = BLOCK_ALPHA) -> list[tuple[Path, tuple[int, int]]]:
+                    block_alpha: int = BLOCK_ALPHA, week: Optional[int] = None,
+                    theme: str = "dark", **options) -> list[tuple[Path, tuple[int, int]]]:
     """出图并存到磁盘.返回 [(路径, 尺寸), ...]."""
     out = Path(out_dir) if out_dir else default_wallpaper_dir()
     out.mkdir(parents=True, exist_ok=True)
@@ -345,8 +381,9 @@ def render_to_files(tt: Timetable, out_dir=None, which: str = "both",
     results: list[tuple[Path, tuple[int, int]]] = []
     for label, size in jobs:
         img = render_wallpaper(tt, size=size, background=background, bg_image=bg_image,
-                               block_alpha=block_alpha)
-        path = out / f"课表壁纸_{label}_{stamp}.png"
+                               block_alpha=block_alpha, week=week, theme=theme, **options)
+        view = f"_第{week}周" if week is not None else ""
+        path = out / f"课表壁纸_{label}{view}_{stamp}.png"
         img.convert("RGB").save(path)
         results.append((path, size))
     return results

@@ -23,6 +23,7 @@ class Occurrence:
     room: str
     name: str
     course: Course = field(compare=False, repr=False)
+    source_week: Optional[int] = None
 
     def slot_text(self) -> str:
         span = f"{self.start}-{self.end}" if self.start != self.end else str(self.start)
@@ -31,7 +32,7 @@ class Occurrence:
 
 @dataclass(frozen=True)
 class ScheduleBlock:
-    """同一门课在同一时段、多个周次合并后的块, 供冲突检测使用."""
+    """同一门课在同一时段, 多个周次合并后的块, 供冲突检测使用."""
 
     day: int
     start: int
@@ -57,7 +58,7 @@ def resolve_course(course: Course, total_weeks: int = DEFAULT_TOTAL_WEEKS) -> li
         for week in sorted(base):
             result.append(Occurrence(
                 week=week, day=course.day, start=course.start, end=course.end,
-                room=course.room, name=course.name, course=course,
+                room=course.room, name=course.name, course=course, source_week=week,
             ))
 
     for ch in course.changes:
@@ -65,8 +66,10 @@ def resolve_course(course: Course, total_weeks: int = DEFAULT_TOTAL_WEEKS) -> li
         start = ch.start if ch.start is not None else course.start
         end = ch.end if ch.end is not None else course.end
         result.append(Occurrence(
-            week=ch.week, day=day, start=start, end=end,
+            week=ch.target_week if ch.target_week is not None else ch.week,
+            day=day, start=start, end=end,
             room=ch.room or course.room, name=course.name, course=course,
+            source_week=ch.week,
         ))
     return result
 

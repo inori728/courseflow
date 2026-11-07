@@ -12,6 +12,7 @@ import yaml
 
 from .model import DAYS, Change, Course, Timetable, parse_day, parse_periods
 from .weeks import DEFAULT_TOTAL_WEEKS, parse_weeks
+from .settings import atomic_text
 
 SOURCE_HEADER = (
     "# CourseFlow 课表源文件 -- 用记事本就能改;改完可跑  term check  校对,再跑  term wallpaper  重新出图\n"
@@ -22,7 +23,7 @@ _TOP_KEYS = {
     "timezone", "period_times", "courses",
 }
 _COURSE_KEYS = {"name", "day", "periods", "weeks", "room", "skip", "changes"}
-_CHANGE_KEYS = {"week", "day", "periods", "room"}
+_CHANGE_KEYS = {"week", "day", "periods", "room", "target_week"}
 
 
 class SourceFileError(ValueError):
@@ -158,9 +159,20 @@ def _parse_changes(value, warn, total_weeks: int) -> list[Change]:
             warn(f"changes 第 {i} 条的 week 应为单周次(如 10),已跳过")
             continue
         week = min(wk)
+        if not 1 <= week <= total_weeks:
+            warn(f"changes 第 {i} 条的 week 超出学期范围,已跳过")
+            continue
         if week in seen_weeks:
             warn(f"changes 第 {i} 条的 week {week} 重复,已跳过")
             continue
+
+        target_week = None
+        if item.get("target_week") is not None:
+            target = parse_weeks(item["target_week"], total_weeks=total_weeks)
+            if target is None or len(target) != 1 or not 1 <= min(target) <= total_weeks:
+                warn(f"changes 第 {i} 条的 target_week 应为学期内的单周次,已跳过")
+                continue
+            target_week = min(target)
 
         day = None
         if item.get("day") is not None:
@@ -181,7 +193,7 @@ def _parse_changes(value, warn, total_weeks: int) -> list[Change]:
                 continue
 
         room = str(item.get("room") or "").strip()
-        if day is None and periods is None and not room:
+        if day is None and periods is None and not room and target_week is None:
             warn(f"changes 第 {i} 条没写明改什么(day / periods / room 至少一个),已跳过")
             continue
 
@@ -192,6 +204,7 @@ def _parse_changes(value, warn, total_weeks: int) -> list[Change]:
             end=periods[1] if periods else None,
             room=room,
             extra=extra,
+            target_week=target_week,
         ))
     return out
 
@@ -297,7 +310,7 @@ def save_source(tt: Timetable, path) -> None:
         courses.append(item)
 
     data = dict(tt.extra)
-    data["schema_version"] = tt.schema_version
+    data["schema_version"] = max(tt.schema_version, 3) if any(ch.target_week is not None for c in tt.courses for ch in c.changes) else tt.schema_version
     data["term"] = tt.term
     if tt.semester_start is not None:
         data["semester_start"] = tt.semester_start.isoformat()
@@ -310,13 +323,15 @@ def save_source(tt: Timetable, path) -> None:
         }
     data["courses"] = courses
     text = yaml.safe_dump(data, allow_unicode=True, sort_keys=False, default_flow_style=False)
-    Path(path).write_text(SOURCE_HEADER + text, encoding="utf-8")
+    atomic_text(Path(path), SOURCE_HEADER + text)
 
 
 def _change_to_dict(ch: Change) -> dict:
     """把一条单次调整写回源文件的字典形式(只写实际填了的字段)."""
     item: dict = dict(ch.extra)
     item["week"] = ch.week
+    if ch.target_week is not None:
+        item["target_week"] = ch.target_week
     if ch.day is not None:
         item["day"] = DAYS[ch.day]
     if ch.start is not None:

@@ -14,6 +14,12 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .venv/
+.dev/
+.mimosa/
+.courseflow/
+*.ai-draft.json
+*.proposal.json
+*.busycard
 venv/
 env/
 build/

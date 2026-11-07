@@ -6,6 +6,9 @@ Timetable / Course 保存用户写下的原始课表; 周次展开和 skip / cha
 from __future__ import annotations
 
 import re
+import hashlib
+import json
+from dataclasses import asdict
 from dataclasses import dataclass, field
 from datetime import date, time
 from typing import Optional
@@ -60,9 +63,12 @@ class Change:
     end: Optional[int] = None
     room: str = ""
     extra: dict = field(default_factory=dict, compare=False, repr=False)
+    target_week: Optional[int] = None
 
     def describe(self) -> str:
         parts = []
+        if self.target_week is not None and self.target_week != self.week:
+            parts.append(f"第 {self.target_week} 周")
         if self.day is not None:
             parts.append(DAYS[self.day])
         if self.start is not None:
@@ -117,3 +123,8 @@ class Timetable:
 
     def __len__(self) -> int:
         return len(self.courses)
+
+
+def timetable_signature(tt: Timetable) -> str:
+    content = json.dumps(asdict(tt), default=str, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()

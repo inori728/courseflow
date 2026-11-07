@@ -32,10 +32,10 @@ class WeekParsingTests(unittest.TestCase):
         odd = {1, 3, 5, 7, 9, 11, 13, 15}
         even = {2, 4, 6, 8, 10, 12, 14, 16}
         self.assertEqual(parse_weeks("1-16周(单)"), odd)
-        self.assertEqual(parse_weeks("1-16周（单周）"), odd)
+        self.assertEqual(parse_weeks("1-16周\uff08单周\uff09"), odd)
         self.assertEqual(parse_weeks("1-16周 单周"), odd)
         self.assertEqual(parse_weeks("1-16周(双)"), even)
-        self.assertEqual(parse_weeks("1-16周（双周）"), even)
+        self.assertEqual(parse_weeks("1-16周\uff08双周\uff09"), even)
 
     def test_full_semester_words(self):
         self.assertEqual(parse_weeks("单周"), {1, 3, 5, 7, 9, 11, 13, 15})

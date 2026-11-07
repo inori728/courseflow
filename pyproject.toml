@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "courseflow"
 version = "0.3.0"
-description = "把课表变成壁纸,日历和挂图的课表工具(本地运行,不需要联网)"
+description = "本地课表工具: 壁纸,日历,挂图,组队与可校对的 AI 导入"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -17,6 +17,10 @@ dependencies = [
     "PyYAML>=6",
 ]
 
+[project.optional-dependencies]
+documents = ["pypdf>=5"]
+build = ["pyinstaller>=6.16"]
+
 [project.urls]
 Repository = "https://gitee.com/yeqi728/courseflow"
 GitHub = "https://github.com/inori728/courseflow"
@@ -24,8 +28,8 @@ GitHub = "https://github.com/inori728/courseflow"
 [project.scripts]
 term = "courseflow.cli:main"
 
-[tool.setuptools]
-packages = ["courseflow"]
+[tool.setuptools.packages.find]
+include = ["courseflow", "courseflow.*"]
 
 [tool.setuptools.package-data]
-courseflow = ["data/*.yaml", "data/*.json", "data/*.md"]
+courseflow = ["data/*.yaml", "data/*.json", "data/*.md", "data/*.html", "data/*.png", "data/*.ico"]
