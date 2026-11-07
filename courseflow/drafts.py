@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from .model import DAYS, timetable_signature
+from .notice import NoticeIntent
 from .settings import atomic_text
 from .vision import ImportDraft, draft_from_payload
 
