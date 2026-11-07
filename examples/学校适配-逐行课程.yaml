@@ -1,0 +1,9 @@
+# Each row describes one course. Columns may be header names or 1-based indexes.
+format: records
+header_row: 1
+columns:
+  name: 课程名称
+  day: 上课星期
+  periods: 节次
+  weeks: 周次
+  room: 教室

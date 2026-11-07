@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "courseflow"
-version = "0.3.0"
+version = "1.0.0"
 description = "本地课表工具: 壁纸,日历,挂图,组队与可校对的 AI 导入"
 readme = "README.md"
 license = "MIT"
