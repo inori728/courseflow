@@ -39,6 +39,7 @@ class CourseFlowApp(ctk.CTk):
         self.tt = Timetable()
         self.source = Path(source) if source else service.default_gui_source()
         self.saved_signature = service.file_signature(self.source)
+        self.source_stamp = self._source_stamp()
         self.dirty = False
         self.undo_stack = []
         self.notes = []
@@ -52,6 +53,7 @@ class CourseFlowApp(ctk.CTk):
         self._preview_image = None
         self.last_group_result = None
         self.members = []
+        self.group_current_member = None
         self.notice_available = importlib.util.find_spec("courseflow.notice") is not None
         self.group_available = importlib.util.find_spec("courseflow.group") is not None
         self.poster_available = importlib.util.find_spec("courseflow.poster") is not None
@@ -72,6 +74,7 @@ class CourseFlowApp(ctk.CTk):
         buttons = ctk.CTkFrame(self.header, fg_color="transparent")
         buttons.grid(row=0, column=1, rowspan=2, padx=25)
         Button(buttons, text="打开课表", width=96, fg_color="#edf1fa", text_color=INK, command=self.open_source).pack(side="left", padx=5)
+        Button(buttons, text="刷新课表", width=88, fg_color="#edf1fa", text_color=INK, command=self.refresh_source).pack(side="left", padx=5)
         Button(buttons, text="保存当前课表", width=110, fg_color=ACCENT, command=self.save).pack(side="left", padx=5)
         Button(buttons, text="另存为", width=80, fg_color=LIGHT, text_color=INK, command=lambda: self.save(as_new=True)).pack(side="left", padx=5)
         self.body = ctk.CTkFrame(self.content, fg_color=BG, corner_radius=0)
@@ -83,12 +86,13 @@ class CourseFlowApp(ctk.CTk):
         self.progress.set(0)
         if self.source.exists():
             try:
-                self.tt = service.load_timetable(self.source)
+                self.tt, self.saved_signature = service.load_timetable_snapshot(self.source)
             except ValueError as exc:
                 self.after(150, lambda text=str(exc): messagebox.showerror("课表未能打开", text, parent=self))
         self.go("review" if self.tt.courses else "import")
         self._refresh_file_label()
         self.after(80, self._poll)
+        self.after(1000, self._watch_source)
         self.bind("<Control-s>", lambda event: self.save())
         self.bind("<Control-o>", lambda event: self.open_source())
         self.bind("<Control-z>", lambda event: self.undo())
@@ -405,6 +409,45 @@ class CourseFlowApp(ctk.CTk):
         self.set_timetable(timetable)
         self.go(self.page)
 
+    def _source_stamp(self):
+        try:
+            stat = self.source.stat()
+            return stat.st_mtime_ns, stat.st_size, stat.st_ino
+        except OSError:
+            return None
+
+    def _watch_source(self):
+        if self._closing:
+            return
+        if not self.dirty and not self._busy and self.grab_current() is None:
+            stamp = self._source_stamp()
+            if stamp != self.source_stamp:
+                self.refresh_source(quiet=True)
+        self.after(1000, self._watch_source)
+
+    def refresh_source(self, quiet=False):
+        if self.dirty:
+            if quiet or not messagebox.askyesno("重新读取课表", "重新读取会丢弃尚未保存的编辑. 是否继续?", parent=self):
+                return
+        stamp = self._source_stamp()
+        try:
+            signature = service.file_signature(self.source)
+            if quiet and signature == self.saved_signature:
+                self.source_stamp = stamp
+                return
+            if signature:
+                self.tt, self.saved_signature = service.load_timetable_snapshot(self.source)
+            else:
+                self.tt, self.saved_signature = Timetable(), ""
+        except (ValueError, OSError) as exc:
+            if not quiet:
+                messagebox.showerror("刷新未完成", str(exc), parent=self)
+            return
+        self.source_stamp = stamp
+        self.dirty, self.notes, self.undo_stack = False, [], []
+        self.go(self.page)
+        self.status.configure(text="已读取最新版课表." if signature else "当前课表为空\uff0c可重新导入\u3002")
+
     def save(self, as_new=False):
         path = self.source
         if as_new:
@@ -417,6 +460,7 @@ class CourseFlowApp(ctk.CTk):
             service.save_timetable(self.tt, path, expected_signature=expected)
             self.source = path
             self.saved_signature = service.file_signature(path)
+            self.source_stamp = self._source_stamp()
             self.dirty = False
             service.remember_current_source(path)
             self._refresh_file_label()
@@ -434,9 +478,9 @@ class CourseFlowApp(ctk.CTk):
         path = filedialog.askopenfilename(parent=self, title="打开课表", filetypes=[("课表源文件", "*.yaml *.yml")])
         if path:
             try:
-                self.tt = service.load_timetable(path)
+                self.tt, self.saved_signature = service.load_timetable_snapshot(path)
                 self.source = Path(path)
-                self.saved_signature = service.file_signature(path)
+                self.source_stamp = self._source_stamp()
                 self.dirty, self.notes, self.undo_stack = False, [], []
                 self.review_tab, self.review_week = "周课表", None
                 service.remember_current_source(self.source)
@@ -459,19 +503,21 @@ class CourseFlowApp(ctk.CTk):
 
     def persist_adjustment(self, preview):
         result = service.apply_notification(self.tt, preview)
-        path = self.source
-        service.save_timetable(result, path, expected_signature=self.saved_signature)
-        self.set_timetable(result, [f"{old} -> {new}" for old, new in preview.rows])
-        self.source = path
-        self.saved_signature = service.file_signature(path)
-        self.dirty = False
-        service.remember_current_source(path)
+        self.persist_timetable(result, [f"{old} -> {new}" for old, new in preview.rows])
         self.review_week = preview.focus_week or self.review_week
         self.review_period = preview.focus_period
         self.review_tab = "周课表"
-        self._refresh_file_label()
         self.status.configure(text="当前课表已修改并保存, 周课表已显示调整后的安排.")
         return True
+
+    def persist_timetable(self, result, notes=None):
+        service.save_timetable(result, self.source, expected_signature=self.saved_signature)
+        self.set_timetable(result, notes)
+        self.saved_signature = service.file_signature(self.source)
+        self.source_stamp = self._source_stamp()
+        self.dirty = False
+        service.remember_current_source(self.source)
+        self._refresh_file_label()
 
     def show_export(self):
         self.page_title.configure(text="生成你每天会看到的课表")

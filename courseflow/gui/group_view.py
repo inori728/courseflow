@@ -13,22 +13,27 @@ import json
 import customtkinter as ctk
 
 from .. import service
+from ..group import available_slot
 from ..model import DAYS
+from ..semester import SemesterCalendar
 from .dialogs import ACCENT, Button, OptionMenu, INK, MUTED, CourseDialog, Modal, SemesterDialog, TextDialog, label
 from .styles import LIGHT, LIGHT_ACTIVE, LIGHT_HOVER
 
 
-def add_member(app, card):
+def add_member(app, card, current=False):
     if any(existing.name == card.name for existing in app.members):
         raise ValueError("成员名称重复, 请为这位成员换一个名称.")
     app.members.append(card)
+    if current:
+        app.group_current_member = card.name
     app.go("group")
 
 
 class MemberReviewDialog(Modal):
-    def __init__(self, app, timetable, notes=None):
+    def __init__(self, app, timetable, notes=None, current=False):
         super().__init__(app, "核对成员课表", 880, 700)
         self.timetable = copy.deepcopy(timetable)
+        self.current = current
         label(self, "核对后加入组队", 23).pack(anchor="w", padx=24, pady=(22, 6))
         label(self, "求交只使用忙闲格. 导出的忙闲卡不包含课程名称和教室.", 12, MUTED).pack(anchor="w", padx=24, pady=(0, 12))
         form = ctk.CTkFrame(self, fg_color="white", corner_radius=12)
@@ -96,7 +101,7 @@ class MemberReviewDialog(Modal):
             if not self.confirmed.get():
                 raise ValueError("请先核对并勾选确认.")
             card = service.make_busy_card(self.timetable, self.name.get(), campus=self.campus.get())
-            add_member(self.app, card)
+            add_member(self.app, card, self.current)
             self.close()
         except ValueError as exc:
             messagebox.showerror("请核对成员信息", str(exc), parent=self)
@@ -154,6 +159,41 @@ class MeetingDialog(Modal):
             self.close()
         except (ValueError, OSError) as exc:
             messagebox.showerror("导出未完成", str(exc), parent=self)
+
+
+class ActivityDialog(Modal):
+    def __init__(self, view, day, period, last):
+        self.begin, self.end = available_slot(view.result, day, period, last)
+        super().__init__(view.app, "添加事件", 560, 350)
+        self.day, self.period, self.last = day, period, last
+        label(self, "添加事件", 23).pack(anchor="w", padx=24, pady=(24, 6))
+        label(self, f"{self.begin:%Y-%m-%d} {DAYS[day]} {self.begin:%H:%M}-{self.end:%H:%M}",
+              14, MUTED).pack(anchor="w", padx=24, pady=(0, 14))
+        label(self, "活动名称").pack(anchor="w", padx=24)
+        self.activity_name = ctk.CTkEntry(self, height=34)
+        self.activity_name.pack(fill="x", padx=24, pady=(4, 10))
+        label(self, "地点 (选填)").pack(anchor="w", padx=24)
+        self.room = ctk.CTkEntry(self, height=34)
+        self.room.pack(fill="x", padx=24, pady=(4, 10))
+        Button(self, text="保存到我的课表", fg_color=ACCENT, command=self.save).pack(anchor="e", padx=24, pady=14)
+
+    def save(self):
+        try:
+            app = self.app
+            calendar = SemesterCalendar.from_timetable(app.tt)
+            week = (self.begin.date() - calendar.start).days // 7 + 1
+            begin, end = calendar.datetime_for(week, self.day, self.period, self.last)
+            if (begin, end) != (self.begin, self.end):
+                raise ValueError("成员时段与我的课表作息不一致, 请核对后再添加.")
+            tt, week = service.add_group_activity(app.tt, self.begin.date(), self.period, self.last,
+                                                  self.activity_name.get(), self.room.get())
+            app.persist_timetable(tt)
+            app.review_week, app.review_period, app.review_tab = week, self.period, "周课表"
+            self.close()
+            app.go("review")
+            app.status.configure(text="组队活动已保存, 并计入我的忙闲时间.")
+        except (ValueError, OSError) as exc:
+            messagebox.showerror("活动未保存", str(exc), parent=self)
 
 
 class GroupView(ctk.CTkFrame):
@@ -231,7 +271,10 @@ class GroupView(ctk.CTkFrame):
         if not self.app.tt.courses:
             messagebox.showinfo("先导入课表", "当前课表没有课程.", parent=self.app)
             return
-        MemberReviewDialog(self.app, self.app.tt)
+        if self.app.group_current_member:
+            messagebox.showinfo("已加入", "我的课表已加入, 查询时会读取当前安排.", parent=self.app)
+            return
+        MemberReviewDialog(self.app, self.app.tt, current=True)
 
     def import_member(self):
         path = filedialog.askopenfilename(parent=self.app, title="添加成员课表", filetypes=[("课表或图片", "*.yaml *.yml *.xlsx *.csv *.png *.jpg *.jpeg *.webp")])
@@ -317,11 +360,16 @@ class GroupView(ctk.CTkFrame):
 
     def remove_member(self, index):
         if messagebox.askyesno("移除成员", "只从本次组队列表移除这位成员?", parent=self.app):
+            if self.app.members[index].name == self.app.group_current_member:
+                self.app.group_current_member = None
             del self.app.members[index]
             self.app.go("group")
 
     def find(self):
         try:
+            for index, card in enumerate(self.app.members):
+                if card.name == self.app.group_current_member:
+                    self.app.members[index] = service.make_busy_card(self.app.tt, card.name, campus=card.campus)
             self.result = service.group_free(self.app.members, int(self.week.get()), int(self.minimum.get()))
             self.app.last_group_result = self.result
             result = self.result
@@ -333,8 +381,12 @@ class GroupView(ctk.CTkFrame):
             panel.pack(fill="both", expand=True)
             self.selected = tk.IntVar(value=0)
             for index, window in enumerate(result.windows):
-                ctk.CTkRadioButton(panel, text=window.describe(), variable=self.selected, value=index,
-                                   font=("Microsoft YaHei UI", 14)).pack(anchor="w", padx=15, pady=9)
+                row = ctk.CTkFrame(panel, fg_color="transparent")
+                row.pack(fill="x", padx=15, pady=6)
+                ctk.CTkRadioButton(row, text=window.describe(), variable=self.selected, value=index,
+                                   font=("Microsoft YaHei UI", 14)).pack(side="left")
+                Button(row, text="添加活动", width=80, fg_color=LIGHT, text_color=INK,
+                       command=lambda item=window: self.activity(item.day, item.start, item.end)).pack(side="right")
             if not result.windows:
                 label(panel, "没有满足条件的全员空闲时段.", 14, MUTED).pack(pady=35)
             grid = ctk.CTkScrollableFrame(self.tabs.tab("热力图"), fg_color="transparent")
@@ -344,16 +396,30 @@ class GroupView(ctk.CTkFrame):
             for day in range(7):
                 label(grid, DAYS[day], 11).grid(row=1, column=day + 1, padx=3, pady=8)
             for period in range(1, 13):
-                label(grid, str(period), 11, MUTED).grid(row=period + 1, column=0, padx=6)
+                span = result.period_times.get(period)
+                clock = f"\n{span[0]:%H:%M}-{span[1]:%H:%M}" if span else ""
+                label(grid, f"{period}{clock}", 11, MUTED).grid(row=period + 1, column=0, padx=6)
                 for day in range(7):
                     count = result.counts[day * 12 + period - 1]
                     color = "#d9f3e7" if count == 0 else "#dce4f6"
-                    ctk.CTkLabel(grid, text="空闲" if not count else f"{count} 人忙", width=58, height=28, fg_color=color,
-                                 corner_radius=5, text_color="#31644e" if not count else "#415576", font=("Microsoft YaHei UI", 11)).grid(row=period + 1, column=day + 1, padx=2, pady=2)
+                    if count:
+                        cell = ctk.CTkLabel(grid, text=f"{count} 人忙", width=58, height=28, fg_color=color,
+                                            corner_radius=5, text_color="#415576", font=("Microsoft YaHei UI", 11))
+                    else:
+                        cell = Button(grid, text="空闲", width=58, height=28, fg_color=color, text_color="#31644e",
+                                      hover_color="#c6ecda", font=("Microsoft YaHei UI", 11),
+                                      command=lambda d=day, p=period: self.activity(d, p))
+                    cell.grid(row=period + 1, column=day + 1, padx=2, pady=2)
             self.export_meeting_button.configure(state="normal" if result.windows else "disabled")
             self.heatmap_button.configure(state="normal")
         except ValueError as exc:
             messagebox.showerror("无法求交", str(exc), parent=self.app)
+
+    def activity(self, day, period, last=None):
+        try:
+            ActivityDialog(self, day, period, last or period)
+        except ValueError as exc:
+            messagebox.showerror("无法选择时段", str(exc), parent=self.app)
 
     def meeting(self):
         if self.result and self.result.windows:

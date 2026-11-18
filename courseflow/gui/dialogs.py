@@ -8,7 +8,7 @@ import customtkinter as ctk
 
 from .. import service
 from ..model import DAYS
-from .styles import ACCENT, BG, INK, MUTED, Button, OptionMenu
+from .styles import ACCENT, BG, INK, LIGHT, MUTED, Button, OptionMenu
 
 
 class Modal(ctk.CTkToplevel):
@@ -141,6 +141,8 @@ class SemesterDialog(Modal):
             entry.grid(row=row, column=1, padx=18, pady=7, sticky="ew")
             self.fields[key] = entry
         label(body, "节次时间, 格式 HH:MM-HH:MM", 14).grid(row=4, column=0, columnspan=2, padx=18, pady=(16, 8), sticky="w")
+        Button(body, text="套用 08:00-22:40 作息", width=154, fg_color=LIGHT, text_color=INK,
+               command=self.use_school_clocks).grid(row=4, column=1, padx=18, pady=(16, 8), sticky="e")
         self.clocks = {}
         for period in range(1, 13):
             label(body, f"第 {period} 节").grid(row=period + 4, column=0, padx=18, pady=4, sticky="w")
@@ -154,6 +156,12 @@ class SemesterDialog(Modal):
         footer.pack(fill="x", padx=28, pady=20)
         Button(footer, text="取消", width=90, fg_color="#dfe5f0", text_color=INK, command=self.close).pack(side="left")
         Button(footer, text="确认设置", fg_color=ACCENT, command=self.save).pack(side="right")
+
+    def use_school_clocks(self):
+        from ..semester import SCHOOL_CLOCKS
+        for period, value in SCHOOL_CLOCKS.items():
+            self.clocks[period].delete(0, "end")
+            self.clocks[period].insert(0, value)
 
     def save(self):
         try:

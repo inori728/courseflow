@@ -224,20 +224,35 @@ def render_heatmap(result: GroupResult, out) -> Path:
     return path
 
 
-def export_meeting(result: GroupResult, window: FreeWindow, title: str, out,
-                   start: Optional[int] = None, end: Optional[int] = None) -> Path:
-    first = window.start if start is None else start
-    last = window.end if end is None else end
-    if window not in result.windows or not window.start <= first <= last <= window.end:
-        raise GroupError("会议时间应位于所选的全员空闲时段内.")
+def available_slot(result: GroupResult, day: int, first: int, last: int):
+    """Resolve a selected green cell or range to an actual date and clock span."""
+    if not 0 <= day < 7 or not 1 <= first <= last <= 12:
+        raise GroupError("请选择有效的日期和节次.")
+    if any(result.counts[day * 12 + period - 1] for period in range(first, last + 1)):
+        raise GroupError("这个范围包含忙碌节次, 请重新选择.")
+    calendar = SemesterCalendar(result.monday, 1, result.period_times, result.timezone)
+    return calendar.datetime_for(1, day, first, last)
+
+
+def write_meeting(result, day, first, last, title, out, room=""):
+    available_slot(result, day, first, last)
     if not title.strip():
         raise GroupError("请填写会议名称.")
     tt = Timetable(
         term=title.strip(), semester_start=result.monday, weeks_total=1,
         period_times=result.period_times, timezone=result.timezone,
-        courses=[Course(name=title.strip(), day=window.day, start=first, end=last, weeks="1周")],
+        courses=[Course(name=title.strip(), day=day, start=first, end=last, room=room.strip(), weeks="1周")],
     )
     return write_calendar(tt, out)
+
+
+def export_meeting(result: GroupResult, window: FreeWindow, title: str, out,
+                   start: Optional[int] = None, end: Optional[int] = None, room: str = "") -> Path:
+    first = window.start if start is None else start
+    last = window.end if end is None else end
+    if window not in result.windows or not window.start <= first <= last <= window.end:
+        raise GroupError("会议时间应位于所选的全员空闲时段内.")
+    return write_meeting(result, window.day, first, last, title, out, room)
 
 
 def save_card(card: BusyCard, out) -> Path:

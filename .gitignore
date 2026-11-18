@@ -20,6 +20,7 @@ __pycache__/
 *.ai-draft.json
 *.proposal.json
 *.busycard
+*.courseflow-lock
 venv/
 env/
 build/

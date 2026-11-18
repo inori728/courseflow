@@ -167,7 +167,8 @@ class WeeklyTimetable(ctk.CTkFrame):
                     tag = f"course-{day}-{len(self.canvas.find_withtag('course'))}"
                     self.canvas.create_rectangle(left, top, right, bottom, fill=color, outline=color, tags=(tag, "course"))
                     text_width = max(self.s(10), right - left - self.s(12))
-                    name = self._wrapped(entry.name, self.title_font, text_width, 2)
+                    title = f"[组队] {entry.name}" if entry.course.kind == "activity" else entry.name
+                    name = self._wrapped(title, self.title_font, text_width, 2)
                     self.canvas.create_text(left + self.s(6), top + self.s(5), text=name, anchor="nw", font=self.title_font, fill=INK, tags=tag)
                     room_y = top + self.s(7) + len(name.splitlines()) * self.title_font.metrics("linespace")
                     if room_y + self.small_font.metrics("linespace") < bottom:
@@ -182,7 +183,8 @@ class WeeklyTimetable(ctk.CTkFrame):
         text = f"第 {entry.week} 周 {DAYS[entry.day]} {entry.start}-{entry.end} 节\n地点: {entry.room or '未填写'}"
         if entry.source_week != entry.week:
             text += f"\n由第 {entry.source_week} 周调整到本周."
-        messagebox.showinfo(entry.name, text, parent=self.winfo_toplevel())
+        title = f"[组队] {entry.name}" if entry.course.kind == "activity" else entry.name
+        messagebox.showinfo(title, text, parent=self.winfo_toplevel())
 
     def destroy(self):
         if self._draw_job is not None:

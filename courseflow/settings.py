@@ -32,12 +32,16 @@ def settings_dir() -> Path:
 
 
 def atomic_text(path: Path, text: str) -> None:
+    atomic_bytes(path, text.encode("utf-8"))
+
+
+def atomic_bytes(path: Path, data: bytes) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, name = tempfile.mkstemp(prefix=".courseflow-", suffix=".tmp", dir=path.parent)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
-            stream.write(text)
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(data)
         os.replace(name, path)
     finally:
         if os.path.exists(name):

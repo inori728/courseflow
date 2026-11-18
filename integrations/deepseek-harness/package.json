@@ -1,0 +1,36 @@
+{
+  "name": "dsh-courseflow",
+  "version": "0.1.1",
+  "private": true,
+  "description": "CourseFlow timetable, reminders and group availability in DeepSeek Harness",
+  "type": "module",
+  "engines": {
+    "dsh": ">=0.2.2-rc.3 <0.3.0"
+  },
+  "exports": {
+    ".": "./host.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-llm": ">=0.2.2-rc.3 <0.3.0",
+    "@deepseek-ai/dsh-tools": ">=0.2.2-rc.3 <0.3.0",
+    "@deepseek-ai/dsh-typert-protocol": ">=0.2.2-rc.3 <0.3.0",
+    "zod": "^4.0.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-input-trigger",
+        "@deepseek-ai/dsh-client-ui-plugin-manager",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-sidebar-right"
+      ]
+    }
+  }
+}

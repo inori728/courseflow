@@ -22,7 +22,7 @@ _TOP_KEYS = {
     "schema_version", "term", "semester_start", "weeks_total",
     "timezone", "period_times", "courses",
 }
-_COURSE_KEYS = {"name", "day", "periods", "weeks", "room", "skip", "changes"}
+_COURSE_KEYS = {"name", "day", "periods", "weeks", "room", "skip", "changes", "kind"}
 _CHANGE_KEYS = {"week", "day", "periods", "room", "target_week"}
 
 
@@ -225,6 +225,10 @@ def load_source(path) -> Timetable:
     except yaml.YAMLError as exc:
         raise SourceFileError(f"课表源文件的格式有问题(YAML 解析失败):{p}\n  {exc}") from exc
 
+    return timetable_from_mapping(data)
+
+
+def timetable_from_mapping(data) -> Timetable:
     if data is None:
         data = {}
     if not isinstance(data, dict):
@@ -286,15 +290,15 @@ def load_source(path) -> Timetable:
                 skip=skip,
                 changes=changes,
                 extra=extra,
+                kind=str(item.get("kind") or "").strip(),
             )
         )
     return tt
 
 
-def save_source(tt: Timetable, path) -> None:
-    """把课表写回源文件(带一行使用说明;中文不转义;未知字段原样保留)."""
+def timetable_mapping(tt: Timetable, *, sorted_courses=True) -> dict:
     courses = []
-    for c in tt.sorted_courses():
+    for c in tt.sorted_courses() if sorted_courses else tt.courses:
         item: dict = dict(c.extra)
         item.update({
             "name": c.name,
@@ -307,6 +311,8 @@ def save_source(tt: Timetable, path) -> None:
             item["skip"] = list(c.skip)
         if c.changes:
             item["changes"] = [_change_to_dict(ch) for ch in c.changes]
+        if c.kind:
+            item["kind"] = c.kind
         courses.append(item)
 
     data = dict(tt.extra)
@@ -322,8 +328,18 @@ def save_source(tt: Timetable, path) -> None:
             for period, (start, end) in sorted(tt.period_times.items())
         }
     data["courses"] = courses
+    return data
+
+
+def source_text(tt: Timetable) -> str:
+    data = timetable_mapping(tt)
     text = yaml.safe_dump(data, allow_unicode=True, sort_keys=False, default_flow_style=False)
-    atomic_text(Path(path), SOURCE_HEADER + text)
+    return SOURCE_HEADER + text
+
+
+def save_source(tt: Timetable, path) -> None:
+    """把课表写回源文件(带一行使用说明;中文不转义;未知字段原样保留)."""
+    atomic_text(Path(path), source_text(tt))
 
 
 def _change_to_dict(ch: Change) -> dict:

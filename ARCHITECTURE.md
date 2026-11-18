@@ -102,6 +102,16 @@ AI 请求有超时、图片/响应体上限，不跟随重定向。仅在提供�
 
 应用数据放在 `courseflow/data`，包发现包含 GUI 子包和 HTML / 图标。`scripts/build_release.py` 使用已有项目环境构建 Windows 目录包，缓存、工作目录和临时目录位于 `.dev`，输出在 `dist`；不会操作 Git 或平台。`launch_gui.py --self-check` 用于本地验证 Tk 窗口和内置资源。静态点格页目前只准备源文件，未部署。
 
+## DeepSeek Harness 集成
+
+`integrations/deepseek-harness/` 通过 Harness 自带的命令注册、工具注册、输入候选和界面扩展接入。插件注册原生右侧标签页和输入框工具栏的日历按钮。侧栏保留当前会话的校对或确认状态，命令结果在发起会话的侧栏显示。`host.js` 通过本机子进程调用 `courseflow.harness`，从 Harness 附件服务借用本地文件路径，或接收侧栏选择的文件。界面和宿主通过 Harness 原有的本机认证 RPC 通信。
+
+插件与桌面端共用 `COURSEFLOW_HOME` 中的配置与最近打开的课表路径。调课确认使用短期预览凭证和文件签名，落盘与桌面端共用保存锁及备份规则。组队活动以 `kind: activity` 保存为单周安排，已保存活动参与课表显示、日历导出和忙闲求交。学校作息由 `semester.SCHOOL_CLOCKS` 提供预设，空闲格以当前资料包含的日期和钟点定位。
+
+截图识别沿用多模态接口和自检。基于明确节次的常用命令可由本地规则处理，普通对话由 Harness 调用 CourseFlow 工具。图片、课程和成员资料在 CourseFlow 侧栏校对与确认。桌面插件用本地目录链接安装，安装时指定的数据路径记录在插件根目录的 `.dev/` 下。
+
+桌面便携包与 Harness 插件包从本仓库分别构建。`scripts/build_release.py --harness-plugin` 从插件清单读取版本，将 `launch_harness.py` 冻结成 `CourseFlow-Harness.exe`，并打包插件清单、安装脚本和运行文件。源码安装调用项目 Python，独立插件包调用随附的 EXE，两种入口均通过标准输入输出交换 JSON。单独安装插件时，数据目录在首次安装时创建；指定桌面版数据目录后可以共用本地课表。
+
 ## 测试边界
 
 - `weeks.py`：中文数字、单双周、混合周次、无法识别。

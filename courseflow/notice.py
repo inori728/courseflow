@@ -157,9 +157,9 @@ def interpret_notice(text: str, tt: Timetable, client: AIClient) -> NoticeIntent
 def find_candidates(tt: Timetable, intent: NoticeIntent) -> list[Candidate]:
     if intent.source_week is None:
         raise NoticeError("请补充原课次所在周次.")
-    if not intent.course_name.strip():
-        raise NoticeError("请补充课程名称.")
     source_periods = _periods(intent.source_periods)
+    if not intent.course_name.strip() and (intent.source_day is None or source_periods is None):
+        raise NoticeError("请补充课程名称, 或同时指定原星期和节次.")
     result = []
     exact = any(c.name == intent.course_name for c in tt.courses)
     for index, course in enumerate(tt.courses):

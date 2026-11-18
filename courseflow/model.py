@@ -94,6 +94,7 @@ class Course:
     skip: list[int] = field(default_factory=list)       # 停课周次
     changes: list[Change] = field(default_factory=list) # 单次调整
     extra: dict = field(default_factory=dict, compare=False, repr=False)
+    kind: str = ""
 
     @property
     def day_name(self) -> str:

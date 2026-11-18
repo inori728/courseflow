@@ -4,9 +4,15 @@ CLI 只负责参数和文字输出; 真正读写课表, 校对, 出图的流程�
 """
 from __future__ import annotations
 
-from pathlib import Path
-import hashlib
+import base64
 import copy
+import hashlib
+import json
+import os
+import secrets
+from contextlib import contextmanager
+from datetime import date
+from pathlib import Path
 from typing import Optional
 
 from .audit import Review, review
@@ -15,7 +21,8 @@ from .model import Course, Timetable, timetable_signature
 from .parsing import parse_pasted_text, parse_table_file, read_clipboard_text
 from .render import default_wallpaper_dir, render_to_files
 from .rules import HolidayReport, holiday_report
-from .source import load_source, save_source
+from .settings import atomic_bytes, atomic_text
+from .source import load_source, source_text
 
 
 def load_timetable(path) -> Timetable:
@@ -103,7 +110,7 @@ def merge_import(courses, old=None):
     tt.schema_version = old.schema_version
     tt.extra = dict(old.extra)
 
-    old_by_key = {_course_key(c): c for c in old.courses}
+    old_by_key = {_course_key(c): c for c in old.courses if c.kind != "activity"}
     used: set[tuple] = set()
     for course in tt.courses:
         key = _course_key(course)
@@ -116,6 +123,9 @@ def merge_import(courses, old=None):
         used.add(key)
 
     for previous in old.courses:
+        if previous.kind == "activity":
+            tt.courses.append(copy.deepcopy(previous))
+            continue
         if not (previous.skip or previous.changes):
             continue
         if _course_key(previous) not in used:
@@ -126,17 +136,142 @@ def merge_import(courses, old=None):
     return tt
 
 
-def save_timetable(tt: Timetable, target, expected_signature=None) -> Optional[Path]:
-    """写回课表; 旧文件存在时先备份为 .bak, 返回备份路径."""
-    target = Path(target)
-    if expected_signature is not None and file_signature(target) != expected_signature:
-        raise ValueError("课表文件已被其他程序修改, 请重新打开后再保存, 避免覆盖.")
-    backup = None
-    if target.exists():
-        backup = target.with_name(target.name + ".bak")
-        backup.write_bytes(target.read_bytes())
-    save_source(tt, target)
+@contextmanager
+def _timetable_lock(target):
+    """Serialize saves from the desktop and the Harness processes."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    lock = target.with_name(target.name + ".courseflow-lock")
+    with lock.open("a+b") as stream:
+        stream.seek(0)
+        try:
+            if os.name == "nt":
+                import msvcrt
+                msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            raise ValueError("另一处正在保存这份课表, 请稍后重试.") from exc
+        yield
+
+
+def _timetable_bytes(target: Path) -> Optional[bytes]:
+    try:
+        return target.read_bytes()
+    except FileNotFoundError:
+        return None
+
+
+def _signature(data: Optional[bytes]) -> str:
+    return hashlib.sha256(data).hexdigest() if data is not None else ""
+
+
+def _backup_timetable(target, current):
+    if current is None:
+        return None
+    backup = target.with_name(target.name + ".bak")
+    atomic_bytes(backup, current)
     return backup
+
+
+def _undo_entry(undo_path, signature):
+    try:
+        entries = json.loads(undo_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(entries, list):
+        return None
+    for entry in entries:
+        if not isinstance(entry, dict) or entry.get("after") != signature:
+            continue
+        if {"token", "label", "before"} <= entry.keys():
+            return entry
+    return None
+
+
+def timetable_undo_status(undo_path, signature):
+    entry = _undo_entry(undo_path, signature) if signature else None
+    return {"token": entry["token"], "label": entry["label"]} if entry else None
+
+
+def save_timetable(tt: Timetable, target, expected_signature=None, *, undo_path=None, undo_label="") -> Optional[Path]:
+    """Atomically save the timetable and retain its previous bytes for one-step undo if requested."""
+    target = Path(target).resolve()
+    with _timetable_lock(target):
+        current = _timetable_bytes(target)
+        signature = _signature(current)
+        if expected_signature is not None and signature != expected_signature:
+            raise ValueError("课表文件已被其他程序修改, 请重新打开后再保存, 避免覆盖.")
+        contents = source_text(tt).encode("utf-8")
+        backup = _backup_timetable(target, current)
+        previous = None
+        if undo_path is not None and current != contents:
+            entry = {"token": secrets.token_hex(16), "label": undo_label, "after": _signature(contents),
+                     "before": base64.b64encode(current).decode("ascii") if current is not None else None}
+            previous = _undo_entry(undo_path, signature)
+            # A failed replacement leaves the saved bytes matching the previous entry.
+            atomic_text(undo_path, json.dumps([entry, previous] if previous else [entry]))
+        atomic_bytes(target, contents)
+        if previous:
+            try:
+                atomic_text(undo_path, json.dumps([entry]))
+            except OSError:
+                pass  # The entry for these bytes is already on disk.
+    return backup
+
+
+def undo_timetable(target, undo_path, token):
+    """Restore only the last plugin save if the exact saved content is still current."""
+    target = Path(target).resolve()
+    with _timetable_lock(target):
+        current = _timetable_bytes(target)
+        entry = _undo_entry(undo_path, _signature(current))
+        if entry is None or token != entry["token"]:
+            raise ValueError("这一步已无法撤销\uff0c请刷新课表查看当前状态\u3002")
+        before = base64.b64decode(entry["before"], validate=True) if entry["before"] is not None else None
+        # Drop failed or superseded entries before restoring their matching bytes.
+        atomic_text(undo_path, json.dumps([entry]))
+        _backup_timetable(target, current)
+        if before is None:
+            target.unlink()
+        else:
+            atomic_bytes(target, before)
+        try:
+            undo_path.unlink()
+        except OSError:
+            pass  # The old entry no longer matches the timetable.
+    return entry["label"]
+
+
+def load_timetable_snapshot(path):
+    """Return the timetable and the signature of the bytes it was loaded from."""
+    for _ in range(2):
+        signature = file_signature(path)
+        timetable = load_timetable(path)
+        if signature == file_signature(path):
+            return timetable, signature
+    raise ValueError("课表正在更新, 请刷新后重试.")
+
+
+def add_group_activity(tt, when: date, start: int, end: int, title: str, room: str = ""):
+    from .schedule import resolve_timetable
+    from .semester import SemesterCalendar
+    calendar = SemesterCalendar.from_timetable(tt)
+    week = (when - calendar.start).days // 7 + 1
+    day = when.weekday()
+    calendar.date_for(week, day)
+    if not 1 <= start <= end <= 12:
+        raise ValueError("请从忙闲图选择有效的节次.")
+    calendar.times_for(start, end)
+    title, room = title.strip(), room.strip()
+    if not title or len(title) > 120 or len(room) > 120:
+        raise ValueError("请填写 1-120 字的活动名称, 地点最长 120 字.")
+    for entry in resolve_timetable(tt, tt.weeks_total):
+        if entry.day == day and entry.week in (None, week) and entry.start <= end and entry.end >= start:
+            raise ValueError(f"活动与 '{entry.name}' 的安排重叠, 请重新选时间.")
+    updated = copy.deepcopy(tt)
+    updated.courses.append(Course(title, day, start, end, room, f"{week}周", kind="activity"))
+    return updated, week
 
 
 def prepare_demo_source(target, sample_path, force: bool = False) -> bool:
@@ -176,8 +311,7 @@ def export_calendar(tt: Timetable, out=None, reminder_minutes: int = 15) -> Path
 
 
 def file_signature(path) -> str:
-    target = Path(path)
-    return hashlib.sha256(target.read_bytes()).hexdigest() if target.exists() else ""
+    return _signature(_timetable_bytes(Path(path)))
 
 
 def import_text(text: str) -> tuple[list[Course], list[str]]:
@@ -275,9 +409,9 @@ def export_group_heatmap(result, path):
     return render_heatmap(result, path)
 
 
-def export_group_meeting(result, window, title, path, start=None, end=None):
+def export_group_meeting(result, window, title, path, start=None, end=None, room=""):
     from .group import export_meeting
-    return export_meeting(result, window, title, path, start, end)
+    return export_meeting(result, window, title, path, start, end, room=room)
 
 
 def export_poster(tt, path, week=None):

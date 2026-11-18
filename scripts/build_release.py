@@ -63,21 +63,48 @@ def copy_licenses(application):
             shutil.copyfile(path, dest)
 
 
+def copy_harness_bundle(root, application, release):
+    plugin = Path("integrations") / "deepseek-harness"
+    for name in ("package.json", "cordis.patch.yml", "host.js", "client.js", "locale/en.json", "locale/zh.json"):
+        path = plugin / name
+        target = application / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(root / path, target)
+
+    launcher = "Start-CourseFlow-Harness.ps1"
+    (application / launcher).write_text((root / launcher).read_text(encoding="utf-8-sig"), encoding="utf-8-sig")
+    guide = root / "docs" / "releases" / f"harness-v{release['version']}.md"
+    shutil.copyfile(guide, application / "使用说明.md")
+    sample = "插件示例课表.yaml"
+    shutil.copyfile(root / "examples" / sample, application / sample)
+    (application / "harness-release.json").write_text(json.dumps(release, indent=2) + "\n", encoding="utf-8")
+
+
 def main():
     root = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(description="Build a local CourseFlow bundle without publishing.")
     parser.add_argument("--output-dir", default="dist", help="Output directory inside the project.")
+    parser.add_argument("--harness-plugin", action="store_true", help="Build the independent Harness plugin package.")
     args = parser.parse_args()
     sys.path.insert(0, str(root))
     from courseflow import __version__
     work = root / ".dev" / "build"
     output = root / args.output_dir
+    name = "CourseFlow-Harness" if args.harness_plugin else "CourseFlow"
+    application = output / name
+    version = __version__
+    if args.harness_plugin:
+        package = json.loads((root / "integrations/deepseek-harness/package.json").read_text(encoding="utf-8"))
+        version = package["version"]
+        release = {"version": version, "courseflow": __version__, "harness": package["engines"]["dsh"]}
     config = root / ".dev" / "pyinstaller-cache"
     temporary = root / ".dev" / "tmp"
     for target in (work, output, config, temporary):
         if not target.resolve().is_relative_to(root):
             raise SystemExit("Build output must remain inside the project.")
         target.mkdir(parents=True, exist_ok=True)
+    if args.harness_plugin and application.exists():
+        raise SystemExit("Choose a fresh --output-dir for the plugin so an existing installation is preserved.")
     env = dict(os.environ, TEMP=str(temporary), TMP=str(temporary), PYINSTALLER_CONFIG_DIR=str(config))
     runtime = Path(sys.base_prefix) / "Library" / "bin"
     binaries = []
@@ -86,23 +113,32 @@ def main():
         # base runtime DLLs explicitly and expose their dependency directory
         # to this build subprocess only; never modify the user's PATH.
         env["PATH"] = str(runtime) + os.pathsep + env.get("PATH", "")
-        for name in ("ffi.dll", "libmpdec-4.dll", "tcl86t.dll", "tk86t.dll"):
-            path = runtime / name
+        native_libraries = ("ffi.dll", "libmpdec-4.dll")
+        if not args.harness_plugin:
+            native_libraries += ("tcl86t.dll", "tk86t.dll")
+        for library in native_libraries:
+            path = runtime / library
             if path.is_file():
                 binaries.extend(["--add-binary", str(path) + ":."])
-    subprocess.run([sys.executable, str(root / "scripts" / "create_icon.py")], check=True, cwd=root, env=env)
-    command = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--onedir", "--windowed",
-               "--name", "CourseFlow", "--collect-all", "customtkinter", "--collect-all", "courseflow",
+    if args.harness_plugin:
+        entry = "launch_harness.py"
+        options = ["--console", "--hide-console=hide-early", "--collect-data", "courseflow"]
+    else:
+        subprocess.run([sys.executable, str(root / "scripts" / "create_icon.py")], check=True, cwd=root, env=env)
+        entry = "launch_gui.py"
+        options = ["--windowed", "--collect-all", "customtkinter", "--collect-all", "courseflow"]
+    command = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--onedir", "--name", name, *options,
                "--collect-submodules", "pypdf", "--icon", str(root / "courseflow" / "data" / "icon.ico"),
                "--distpath", str(output), "--workpath", str(work), "--specpath", str(root / ".dev" / "spec"),
-               *binaries, str(root / "launch_gui.py")]
+               *binaries, str(root / entry)]
     subprocess.run(command, check=True, cwd=root, env=env)
-    application = output / "CourseFlow"
     shutil.copyfile(root / "LICENSE", application / "LICENSE.txt")
     shutil.copyfile(root / "THIRD_PARTY.md", application / "THIRD_PARTY.md")
     shutil.copyfile(root / "courseflow" / "data" / "README.md", application / "holiday-data-license.md")
     guide = root / "docs" / "使用说明.md"
-    if guide.exists():
+    if args.harness_plugin:
+        copy_harness_bundle(root, application, release)
+    elif guide.exists():
         shutil.copyfile(guide, application / "使用说明.md")
     copy_licenses(application)
     records = []
@@ -111,9 +147,13 @@ def main():
             records.append({"file": path.relative_to(application).as_posix(), "bytes": path.stat().st_size,
                             "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
     dependencies = {name: metadata.version(name) for name in RUNTIME_PACKAGES + ("pyinstaller",)}
-    manifest = {"version": __version__, "python": sys.version, "dependencies": dependencies, "files": records}
-    (root / ".dev" / "build-manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-    archive = shutil.make_archive(str(output / f"CourseFlow-{__version__}-windows-x64"), "zip", root_dir=output, base_dir="CourseFlow")
+    manifest = {"version": version, "python": sys.version, "dependencies": dependencies, "files": records}
+    manifest_name = "harness-build-manifest.json" if args.harness_plugin else "build-manifest.json"
+    (root / ".dev" / manifest_name).write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    archive = Path(shutil.make_archive(str(output / f"{name}-{version}-windows-x64"), "zip", root_dir=output, base_dir=name))
+    if args.harness_plugin:
+        sha256 = hashlib.sha256(archive.read_bytes()).hexdigest()
+        (output / "SHA256SUMS.txt").write_bytes(f"{sha256}  {archive.name}\n".encode("ascii"))
     print("Built for local review:", archive)
 
 

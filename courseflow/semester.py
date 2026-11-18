@@ -10,6 +10,12 @@ from typing import Optional
 
 from .model import Timetable
 
+SCHOOL_CLOCKS = dict(enumerate((
+    "08:00-08:45", "08:55-09:40", "10:00-10:45", "10:55-11:40",
+    "14:00-14:45", "14:55-15:40", "16:00-16:45", "16:55-17:40",
+    "19:00-19:45", "19:55-20:40", "21:00-21:45", "21:55-22:40",
+), 1))
+
 
 class SemesterError(ValueError):
     """学期时间信息不完整或无法换算时抛的错."""

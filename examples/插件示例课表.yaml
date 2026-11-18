@@ -1,0 +1,59 @@
+# CourseFlow Harness 插件虚构示例，用于试跑导入、调课和撤销。
+term: 虚构示例学期
+semester_start: 2026-09-07
+weeks_total: 16
+timezone: Asia/Shanghai
+period_times:
+  1: 08:00-08:45
+  2: 08:50-09:35
+  3: 10:00-10:45
+  4: 10:50-11:35
+  5: 14:00-14:45
+  6: 14:50-15:35
+  7: 16:00-16:45
+  8: 16:50-17:35
+  9: 19:00-19:45
+  10: 19:50-20:35
+  11: 20:40-21:25
+  12: 21:30-22:15
+courses:
+- name: 高等数学
+  day: 周一
+  periods: 1-2
+  weeks: 1-16周
+  room: 示例教学楼101
+- name: 程序设计基础
+  day: 周二
+  periods: 3-4
+  weeks: 2-16周
+  room: 示例机房201
+- name: 体育（篮球）
+  day: 周二
+  periods: 7-8
+  weeks: 1-16周
+  room: 示例操场
+- name: 大学物理
+  day: 周三
+  periods: 3-4
+  weeks: 1-14周
+  room: 示例教学楼202
+- name: 数据结构
+  day: 周四
+  periods: 1-2
+  weeks: 1-16周
+  room: 示例教学楼301
+- name: 数据结构实验
+  day: 周四
+  periods: 3-4
+  weeks: 2-16周
+  room: 示例机房201
+- name: 大学英语
+  day: 周五
+  periods: 3-4
+  weeks: 1-16周
+  room: 示例教学楼203
+- name: 离散数学
+  day: 周五
+  periods: 5-6
+  weeks: 1-16周
+  room: 示例教学楼302
