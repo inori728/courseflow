@@ -10,7 +10,9 @@ CourseFlow turns class timetables into wallpapers, calendars, posters, and share
 
 **CourseFlow 桌面版 1.0.0** 包含迭代 5–9 的实现。迭代 0–4 对应历史版本 v0.3。功能与验证范围见[桌面版发行说明](docs/releases/v1.0.0.md)。已发布版本和可下载文件以 Releases 页面为准。
 
-**DeepSeek Harness 插件 0.1.1** 对应迭代 10，提供独立的 Windows x64 包，内置 CourseFlow 运行环境。插件清单要求 Harness `>=0.2.2-rc.3 <0.3.0`，本机验收使用 `0.2.2-rc.3`。点击 Harness 聊天输入框下方的日历图标，可在右侧查课、导入、调课、组队和导出。桌面版和插件可指定同一个数据目录来共用课表。插件包已在本地准备，待发布。[插件发行说明和安装步骤](docs/releases/harness-v0.1.1.md)
+**DeepSeek Harness 插件 0.1.1** 对应迭代 10，提供独立的 Windows x64 包，内置 CourseFlow 运行环境。插件清单要求 Harness `>=0.2.2-rc.3 <0.3.0`，本机验收使用 `0.2.2-rc.3`。点击 Harness 聊天输入框下方的日历图标，可在右侧查课、导入、调课、组队和导出。桌面版和插件可指定同一个数据目录来共用课表。
+
+插件已正式发布，发行页提供 ZIP 和 SHA-256 校验文件。 [GitHub 发行页](https://github.com/inori728/courseflow/releases/tag/harness-v0.1.1) · [Gitee 发行页](https://gitee.com/yeqi728/courseflow/releases/tag/harness-v0.1.1) · [插件发行说明和安装步骤](docs/releases/harness-v0.1.1.md)
 
 装好插件并导入课表后，可**在 Harness 聊天中用命令调课**。
 
@@ -173,7 +175,7 @@ GUI 先把课表或忙闲卡加入左侧成员列表，再选周次和最少连�
 | 7 | 通知解析、候选选择与确认 | 已实现 |
 | 8 | 组队、忙闲卡和点格页 | 已实现；页面未部署 |
 | 9 | 个性化输出、挂图、文档、图标与 Windows 打包 | 已实现 |
-| 10 | DeepSeek Harness 插件、共享课表与独立 Windows x64 打包 | 已本地验收，待发布 |
+| 10 | DeepSeek Harness 插件、共享课表与独立 Windows x64 打包 | 已发布（0.1.1） |
 
 ## 许可证
 

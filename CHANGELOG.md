@@ -1,6 +1,6 @@
 # 变更记录
 
-## DeepSeek Harness 插件 0.1.1 · 待发布
+## DeepSeek Harness 插件 0.1.1 · 已发布
 
 - 支持在 Harness 聊天框输入 `/courseflow` 命令调课。侧栏展示候选课次、原安排、新安排及冲突，确认后写回课表。支持 @ 候选菜单和对话工具。[命令示例和安装步骤](docs/releases/harness-v0.1.1.md)
 - 提供独立的 Windows x64 插件包，可在已装兼容版本 DeepSeek Harness 的电脑上按需安装。首次使用采用空白数据目录，随包提供可直接导入的虚构示例。也可选择与桌面版共用课表。
