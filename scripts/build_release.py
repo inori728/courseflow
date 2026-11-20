@@ -73,11 +73,21 @@ def copy_harness_bundle(root, application, release):
 
     launcher = "Start-CourseFlow-Harness.ps1"
     (application / launcher).write_text((root / launcher).read_text(encoding="utf-8-sig"), encoding="utf-8-sig")
-    guide = root / "docs" / "releases" / f"harness-v{release['version']}.md"
+    guide = root / "docs" / "使用说明.md"
     shutil.copyfile(guide, application / "使用说明.md")
     sample = "插件示例课表.yaml"
     shutil.copyfile(root / "examples" / sample, application / sample)
     (application / "harness-release.json").write_text(json.dumps(release, indent=2) + "\n", encoding="utf-8")
+
+
+def public_data_arguments(root):
+    from courseflow.backgrounds import BACKGROUNDS
+
+    data = root / "courseflow" / "data"
+    names = ["README.md", "availability.html", "示例课表.yaml", "icon.png", "icon.ico"]
+    names.extend(f"wallpaper-{preset}-{layout}.png" for preset in BACKGROUNDS for layout in ("desktop", "phone"))
+    names.extend(sorted(path.name for path in data.glob("holidays-*.json") if re.fullmatch(r"holidays-[0-9]{4}\.json", path.name)))
+    return [item for name in names for item in ("--add-data", f"{data / name}:courseflow/data")]
 
 
 def main():
@@ -122,15 +132,15 @@ def main():
                 binaries.extend(["--add-binary", str(path) + ":."])
     if args.harness_plugin:
         entry = "launch_harness.py"
-        options = ["--console", "--hide-console=hide-early", "--collect-data", "courseflow"]
+        options = ["--console", "--hide-console=hide-early"]
     else:
         subprocess.run([sys.executable, str(root / "scripts" / "create_icon.py")], check=True, cwd=root, env=env)
         entry = "launch_gui.py"
-        options = ["--windowed", "--collect-all", "customtkinter", "--collect-all", "courseflow"]
+        options = ["--windowed", "--collect-all", "customtkinter", "--collect-submodules", "courseflow"]
     command = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--onedir", "--name", name, *options,
                "--collect-submodules", "pypdf", "--icon", str(root / "courseflow" / "data" / "icon.ico"),
                "--distpath", str(output), "--workpath", str(work), "--specpath", str(root / ".dev" / "spec"),
-               *binaries, str(root / entry)]
+               *public_data_arguments(root), *binaries, str(root / entry)]
     subprocess.run(command, check=True, cwd=root, env=env)
     shutil.copyfile(root / "LICENSE", application / "LICENSE.txt")
     shutil.copyfile(root / "THIRD_PARTY.md", application / "THIRD_PARTY.md")

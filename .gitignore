@@ -44,3 +44,4 @@ Thumbs.db
 # -- 个人课表数据(跑 demo / 导入会生成,不发布)--
 课表.yaml
 课表.yaml.bak
+/忙闲点格页.html

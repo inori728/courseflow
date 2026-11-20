@@ -11,6 +11,7 @@ import json
 import os
 import secrets
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 from typing import Optional
@@ -20,7 +21,7 @@ from .ics import write_calendar
 from .model import Course, Timetable, timetable_signature
 from .parsing import parse_pasted_text, parse_table_file, read_clipboard_text
 from .render import default_wallpaper_dir, render_to_files
-from .rules import HolidayReport, holiday_report
+from .rules import HolidayReport, holiday_report, import_holiday_data
 from .settings import atomic_bytes, atomic_text
 from .source import load_source, source_text
 
@@ -253,7 +254,7 @@ def load_timetable_snapshot(path):
     raise ValueError("课表正在更新, 请刷新后重试.")
 
 
-def add_group_activity(tt, when: date, start: int, end: int, title: str, room: str = ""):
+def add_group_activity(tt, when: date, start: int, end: int, title: str, room: str = "", *, group=None):
     from .schedule import resolve_timetable
     from .semester import SemesterCalendar
     calendar = SemesterCalendar.from_timetable(tt)
@@ -262,7 +263,16 @@ def add_group_activity(tt, when: date, start: int, end: int, title: str, room: s
     calendar.date_for(week, day)
     if not 1 <= start <= end <= 12:
         raise ValueError("请从忙闲图选择有效的节次.")
-    calendar.times_for(start, end)
+    if group is None:
+        calendar.times_for(start, end)
+    else:
+        from .group import available_slot
+
+        span = available_slot(group, (when - group.monday).days, start, end)
+        # The current group's clocks can fill gaps for validation without rewriting the timetable's settings.
+        personal = replace(calendar, period_times={**group.period_times, **calendar.period_times})
+        if personal.datetime_for(week, day, start, end) != span:
+            raise ValueError("成员时段与我的课表作息不一致, 请核对后再添加.")
     title, room = title.strip(), room.strip()
     if not title or len(title) > 120 or len(room) > 120:
         raise ValueError("请填写 1-120 字的活动名称, 地点最长 120 字.")

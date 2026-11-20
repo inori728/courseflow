@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from datetime import timedelta
 import re
+import unicodedata
 
 from .agenda import local_today
 from .model import parse_day
@@ -30,6 +31,18 @@ def command_kind(text, file_count):
     if file_count or formats_for(text) or wants_change(text):
         return "prepare"
     return "agenda"
+
+
+def next_course_name(text):
+    text = unicodedata.normalize("NFKC", text).strip().rstrip("?!.\u3002")
+    target = re.fullmatch(r"(?:帮我)?(?:查(?:询)?|看)?\s*下(?:一)?次\s*(.+?)\s*(?:在哪(?:里|儿)?上|在哪(?:里|儿)?|什么时候(?:上)?|几点(?:上)?|哪个教室)", text)
+    if not target:
+        target = re.fullmatch(r"(.+?)\s*下(?:一)?次(?:课)?\s*(?:在哪(?:里|儿)?上|什么时候(?:上)?|几点(?:上)?|在哪(?:里|儿)?)", text)
+    return target[1].strip(' "\'\u300a\u300b\u201c\u201d') if target else ""
+
+
+def course_search_key(name):
+    return "".join(unicodedata.normalize("NFKC", name).casefold().split())
 
 
 def wants_change(text):

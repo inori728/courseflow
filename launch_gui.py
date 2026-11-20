@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 from pathlib import Path
+import sys
 
 
 def self_check(source, target):
@@ -12,7 +14,6 @@ def self_check(source, target):
     try:
         import ctypes
         import decimal
-        import io
         import ssl
         from openpyxl import Workbook, load_workbook
         from pypdf import PdfReader
@@ -29,7 +30,7 @@ def self_check(source, target):
         assert load_workbook(buffer).active["A1"].value == "CourseFlow"
         sample = Path(service.__file__).resolve().parent / "data" / "示例课表.yaml"
         timetable = service.load_timetable(sample)
-        application = CourseFlowApp(source)
+        application = CourseFlowApp(source or sample)
         application.withdraw()
         for page in ("import", "review", "export", "group"):
             application.go(page)
@@ -67,6 +68,12 @@ def self_check(source, target):
 
 
 def main():
+    # Windowed PyInstaller executables have no console streams. Tk extensions
+    # can still write startup diagnostics before the first window opens.
+    if sys.stdout is None:
+        sys.stdout = io.StringIO()
+    if sys.stderr is None:
+        sys.stderr = io.StringIO()
     parser = argparse.ArgumentParser(description="CourseFlow 桌面课表工具")
     parser.add_argument("--file", help="启动时打开的课表源文件")
     parser.add_argument("--self-check", metavar="JSON", help=argparse.SUPPRESS)

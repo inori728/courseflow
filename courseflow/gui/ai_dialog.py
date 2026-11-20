@@ -11,14 +11,15 @@ from .dialogs import ACCENT, Button, OptionMenu, INK, MUTED, Modal, label
 
 
 class AISettingsDialog(Modal):
-    def __init__(self, master):
+    def __init__(self, master, on_verified=None):
         super().__init__(master, "AI 接口设置", 780, 620)
+        self.on_verified = on_verified
         try:
             self.original = service.ai_settings()
         except ValueError:
             self.original = AIConfig()
         label(self, "连接你的多模态 AI", 24).pack(anchor="w", padx=28, pady=(26, 7))
-        label(self, AI_REQUIRED + " 识图和通知调课共用这一份配置.", 13, MUTED, wraplength=710, justify="left").pack(anchor="w", padx=28, pady=(0, 15))
+        label(self, AI_REQUIRED + " 识图, 通知调课和日程草稿共用这一份配置.", 13, MUTED, wraplength=710, justify="left").pack(anchor="w", padx=28, pady=(0, 15))
         panel = ctk.CTkFrame(self, fg_color="white", corner_radius=14)
         panel.pack(fill="x", padx=28)
         panel.grid_columnconfigure(1, weight=1)
@@ -74,6 +75,10 @@ class AISettingsDialog(Modal):
         if self.winfo_exists():
             self.status.configure(text=text, text_color="#18835b")
             self.test_button.configure(state="normal")
+            if self.on_verified:
+                callback = self.on_verified
+                self.close()
+                callback()
 
     def failed(self, exc):
         if self.winfo_exists():

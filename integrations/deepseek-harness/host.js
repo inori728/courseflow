@@ -15,7 +15,7 @@ const binding = readBinding()
 const backend = process.env.COURSEFLOW_BACKEND || binding.backend
 const home = process.env.COURSEFLOW_HOME || binding.dataDir || join(dev, 'user-data')
 const workbenchOps = new Set(['preview', 'commit', 'undo', 'semester_week', 'save_semester_week', 'wallpaper_background_preview',
-  'group_search', 'group_refresh', 'activity', 'point_grid'])
+  'group_search', 'group_refresh', 'activity', 'activity_preview', 'activity_clocks', 'point_grid', 'todos', 'todo_reserve', 'schedule'])
 const tableFiles = new Set(['.yaml', '.yml', '.csv', '.xlsx', '.docx', '.pdf', '.busycard', '.txt'])
 const imageSuffixes = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp', 'image/gif': '.gif' }
 const objectSchema = { type: 'object', additionalProperties: true }
@@ -168,6 +168,7 @@ class CourseFlowService extends TypertRemoteService {
     super(ctx, 'courseflow')
     this.state = {
       jobs: new Map(),
+      sessions: new Map(),
       queue: Promise.resolve(),
       status: null,
       statusPending: null,
@@ -187,7 +188,7 @@ class CourseFlowService extends TypertRemoteService {
       if (action === 'resume') {
         const job = this.state.jobs.get(session)
         if (!job || job.id !== payload.job) return { ok: false, error: '请重新发起这次课表操作.' }
-        const result = await this.call('request', job.input, invocation.signal)
+        const result = await this.inSession('request', job.input, session, invocation.signal)
         if (this.state.jobs.get(session) === job) job.response = { id: job.id, ...result }
         return result
       }
@@ -197,17 +198,93 @@ class CourseFlowService extends TypertRemoteService {
         return this.call(action, payload, invocation.signal)
       }
       if (action === 'request') {
-        const { mode, text = '', week, formats, include_self, files, wallpaper } = payload
-        return this.call('request', { mode, text, week, formats, include_self, wallpaper, files: browserFiles(files) }, invocation.signal)
+        const { mode, text = '', week, formats, include_self, files, wallpaper, shortcodes, member_order, search_now } = payload
+        const groupOptions = mode === 'group' ? { shortcodes, member_order, search_now } : {}
+        return this.inSession('request', { mode, text, week, formats, include_self, wallpaper,
+          files: browserFiles(files), ...groupOptions }, session, invocation.signal)
       }
       if (workbenchOps.has(action)) {
         const { files, ...options } = payload
-        return this.call(action, options, invocation.signal)
+        return this.inSession(action, options, session, invocation.signal)
       }
       return { ok: false, error: '未知的 CourseFlow 操作.' }
     } catch (error) {
       return { ok: false, error: error.message }
     }
+  }
+
+  inSession(action, payload, session, signal) {
+    const sessions = this.state.sessions
+    const current = sessions.get(session) || { queue: Promise.resolve(), workbench: {} }
+    sessions.delete(session)
+    sessions.set(session, current)
+    if (sessions.size > 30) sessions.delete(sessions.keys().next().value)
+    const pending = current.queue.then(async () => {
+      let fields = payload
+      const work = current.workbench
+      if (action === 'request') {
+        fields = { ...payload, group_token: current.group, schedule_token: current.schedule, workbench: work }
+      } else if (action === 'activity_preview' || action === 'todo_reserve') {
+        fields = { ...payload, group_token: payload.group_token || current.group }
+      } else if (action === 'schedule') {
+        const operation = payload.operation
+        if (payload.token && current.schedule && payload.token !== current.schedule) {
+          return { ok: false, error: '日程草稿已更新, 请重新打开日程后继续.' }
+        }
+        fields = { ...payload, token: payload.token || current.schedule,
+          group_token: payload.group_token || current.group }
+        if (operation === 'current' && !fields.token) return { ok: true, value: { type: 'schedule_empty' } }
+      }
+      const response = await this.call(action, fields, signal)
+      if (response.ok) {
+        const value = response.value
+        if (value.type === 'prepare') {
+          work.prepared = value.token
+          work.confirmation = null
+          work.candidates = []
+        }
+        if (value.type === 'preview') {
+          work.prepared = value.token
+          work.confirmation = value.confirmation || null
+          work.candidates = (value.candidates || []).map(item => item.id)
+        }
+        if (value.type === 'semester_week') {
+          work.semester = value.token
+          work.suggested_week = value.suggested_week ?? null
+        }
+        if (value.type === 'agenda' && Number.isInteger(value.week)) work.agenda_week = value.week
+        if (value.type === 'group_prepare') work.group_prepare = value.token
+        if (value.type === 'group_result') {
+          current.group = value.token
+          work.activity = null
+        }
+        if (value.type === 'activity') {
+          current.group = value.group_token
+          work.activity = value.token
+        }
+        if (value.type === 'todo_reserve') work.todo_id = value.item?.id || null
+        if (value.type === 'saved' && value.updated) {
+          work.confirmation = null
+          work.semester = null
+          if (value.group_token) {
+            work.activity = null
+            work.todo_id = null
+          }
+          if (action === 'request') {
+            this.state.statusGeneration++
+            this.state.status = null
+          }
+        }
+        if (value.type === 'schedule' || value.type === 'schedule_options') {
+          current.group = value.group_token || current.group
+          current.schedule = value.token
+          if (value.activity_token) work.activity = value.activity_token
+        }
+      }
+      return response
+    })
+    current.queue = pending.catch(() => {})
+    return pending
   }
 
   call(action, payload, signal) {
@@ -265,7 +342,7 @@ class CourseFlowService extends TypertRemoteService {
   }
 }
 
-const guidance = 'For CourseFlow requests call courseflow_request with the user instructions. It opens a local panel for imports, edits and grouped availability. The user completes the preview and confirmation in that panel. Do not edit schedule files directly; do not claim that a preview was saved. Use structured intent only if the user provided complete fields. Explicit ranges are small periods, paired big periods use 1-2, 3-4, etc. Ask the user to clarify a bare period number.';
+const guidance = 'For CourseFlow requests call courseflow_request with the user instructions. It opens the local panel for timetable work, to-dos, and group planning. The user completes schedule and timetable previews and confirmations there. Do not edit schedule files directly or claim that a preview was saved. Use structured intent only for a complete timetable adjustment. Explicit ranges are small periods, paired big periods use 1-2, 3-4, etc. Clarify a bare period number.'
 
 function summary(response) {
   if (!response.ok) return response.error
@@ -276,6 +353,21 @@ function summary(response) {
     return next ? `${next.date} ${next.clock} ${next.name} ${next.room}`.trim() : '当前没有下一节已确认的课程.'
   }
   if (value.type === 'group_prepare') return '请在 CourseFlow 面板核对成员和周次, 然后查询共同空闲.'
+  if (value.type === 'prepare') return '草稿已打开. 核对后可输入 /courseflow 预览.'
+  if (value.type === 'preview') {
+    const choices = (value.candidates || []).map((item, i) => `${i + 1}. ${item.label}`)
+    const kind = value.overwrite ? (value.change ? '调课' : '导入') : '导出'
+    const next = value.confirmation ? `核对侧栏后可输入 /courseflow 确认${kind}.` :
+      value.conflicts?.length ? '预览存在冲突, 请先核对.' : '可用 /courseflow 选课次 1 选择候选.'
+    return [...choices, next].join('\n')
+  }
+  if (value.type === 'group_result') {
+    const slots = value.windows.slice(0, 10).map((item, i) => `${i + 1}. ${value.dates[item.day]} ${item.start}-${item.end} 节`)
+    return slots.length ? [...slots, '用 /courseflow 选空档 1 选择.'].join('\n') : '没有符合条件的共同空档.'
+  }
+  if (value.type === 'schedule_options') return '请在 CourseFlow 面板选择候选时段, 然后核对日程.'
+  if (value.type === 'schedule') return '请在 CourseFlow 面板核对小组日程.'
+  if (value.type === 'todos') return `待办共 ${value.items.length} 项, 请在 CourseFlow 面板查看.`
   return '请在 CourseFlow 面板查看并确认本次操作.'
 }
 
@@ -294,21 +386,18 @@ export function apply(ctx) {
 
   async function start(agent, text, blocks, args, signal) {
     const payload = { text, files: attachmentFiles(ctx.attachments, blocks), ...args }
-    const response = await board.call('request', payload, signal)
+    const response = await board.inSession('request', payload, agent?.id || '', signal)
     if (agent && !signal?.aborted) board.publish(agent.id, response, payload)
     return response
   }
 
   ctx.commands.register({
     name: 'courseflow',
-    description: '用 CourseFlow 查课、调课、识图导出或查共同空闲',
+    description: '用 CourseFlow 查课、调课、管理待办或安排小组日程',
     input: { hint: '输入课表指令, 可添加课表或忙闲卡', attachments: true },
     recordInput: false,
     async handler({ agent, rawInput, attachments, signal }) {
-      const text = rawInput.trim()
-      if (!text && !attachments.length) {
-        return { kind: 'success', text: '示例: /courseflow 查今天的课, 或附上课表和忙闲卡查共同空闲.' }
-      }
+      const text = rawInput.trim() || (attachments.length ? '' : '帮助')
       try {
         const response = await start(agent, text, attachments, {}, signal)
         if (!response.ok && response.code !== 'ai_settings') return { kind: 'error', text: response.error }

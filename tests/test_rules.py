@@ -1,11 +1,22 @@
+import json
 import unittest
 from datetime import date
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from courseflow.model import Course, Timetable
-from courseflow.rules import _group_spans, holiday_report, load_holidays
+from courseflow.rules import HolidayDataError, _group_spans, holiday_report, import_holiday_data, load_holidays
 
 
 class HolidayRuleTests(unittest.TestCase):
+    def setUp(self):
+        folder = TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        settings = patch("courseflow.rules.settings_dir", return_value=Path(folder.name))
+        settings.start()
+        self.addCleanup(settings.stop)
+
     def test_builtin_2026_data(self):
         data = load_holidays(2026)
         self.assertIsNotNone(data)
@@ -59,6 +70,19 @@ class HolidayRuleTests(unittest.TestCase):
         )
         report = holiday_report(tt)
         self.assertTrue(any("2030" in item for item in report.warnings))
+
+    def test_import_future_year_preserves_previous_data_on_invalid_replacement(self):
+        with TemporaryDirectory() as folder, patch("courseflow.rules.settings_dir", return_value=Path(folder)):
+            source = Path(folder) / "fixture.json"
+            item = {"name": "虚构假期", "date": "2030-09-02", "isOffDay": True}
+            source.write_text(json.dumps({"year": 2030, "days": [item]}), encoding="utf-8")
+            target = import_holiday_data(source, 2030)
+            self.assertEqual(load_holidays(2030).days[0].name, "虚构假期")
+            before = target.read_bytes()
+            source.write_text(json.dumps({"year": 2030, "days": [item, item]}), encoding="utf-8")
+            with self.assertRaises(HolidayDataError):
+                import_holiday_data(source)
+            self.assertEqual(target.read_bytes(), before)
 
 
 if __name__ == "__main__":

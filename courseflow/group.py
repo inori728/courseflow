@@ -5,7 +5,7 @@ import base64
 import binascii
 import json
 import zlib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, time, timedelta
 from pathlib import Path
 from typing import Optional
@@ -16,12 +16,16 @@ from .ics import write_calendar
 from .model import Course, DAYS, Timetable
 from .render import load_font
 from .schedule import resolve_timetable
-from .semester import SemesterCalendar, SemesterError
+from .semester import SCHOOL_CLOCKS, SemesterCalendar, SemesterError, _tzinfo
 from .settings import atomic_text
 
 
 class GroupError(ValueError):
     pass
+
+
+_PRESET_TIMES = {period: tuple(time.fromisoformat(value) for value in span.split("-"))
+                 for period, span in SCHOOL_CLOCKS.items()}
 
 
 @dataclass
@@ -110,7 +114,13 @@ def card_from_timetable(tt: Timetable, name: str, weeks=None, campus: str = "") 
     if not selected or any(isinstance(w, bool) or not isinstance(w, int) or not 1 <= w <= tt.weeks_total for w in selected):
         raise GroupError("请选择学期范围内的周次.")
     busy = {week: set() for week in selected}
-    for occ in resolve_timetable(tt, tt.weeks_total):
+    occurrences = resolve_timetable(tt, tt.weeks_total)
+    last = max((occ for occ in occurrences if occ.week is not None and occ.week > tt.weeks_total),
+               key=lambda occ: occ.week, default=None)
+    if last is not None:
+        raise GroupError(f"'{name}' 的学期总周数为 {tt.weeks_total} 周. '{last.name}' 排到第 {last.week} 周. "
+                         "请在学期与作息核对学期总周数后重试.")
+    for occ in occurrences:
         if occ.week is None:
             raise GroupError(f"'{occ.name}' 的周次无法确认, 请先校对, 不能将未知课程当成空闲.")
         if not 1 <= occ.week <= tt.weeks_total:
@@ -181,7 +191,8 @@ def common_free(cards: list[BusyCard], week: int, minimum_periods: int = 2,
             raise GroupError("成员的学期起始星期不一致.")
         own_week = delta // 7 + 1
         if own_week not in card.busy:
-            raise GroupError(f"{card.name} 没有提供 {monday.isoformat()} 这一周的忙闲数据, 不能按全空闲处理.")
+            raise GroupError(f"{card.name} 没有提供第 {week} 周 ({monday.isoformat()} 起) 对应的忙闲数据. "
+                             "请按日期补充, 或选择各成员都有数据的一周.")
         for cell in card.busy[own_week]:
             counts[cell] += 1
     windows = []
@@ -198,6 +209,45 @@ def common_free(cards: list[BusyCard], week: int, minimum_periods: int = 2,
     campuses = {card.campus for card in cards}
     hint = f"成员填写的校区均为: {next(iter(campuses))}" if len(campuses) == 1 and "" not in campuses else ""
     return GroupResult(week, monday, names, counts, windows, dict(clocks), timezone, warnings, hint)
+
+
+def _clocks_fit(known, additional):
+    if any(known.get(period, span) != span for period, span in additional.items()):
+        return False
+    ordered = [span for _, span in sorted({**known, **additional}.items())]
+    return all(start < end for start, end in ordered) and all(
+        earlier[1] <= later[0] for earlier, later in zip(ordered, ordered[1:])
+    )
+
+
+def group_clock_options(known, timezone, timetable=None):
+    timezone = _tzinfo(timezone)[1]
+    clocks = {}
+    if timetable and timetable.period_times and _tzinfo(timetable.timezone)[1] == timezone:
+        clocks["personal"] = timetable.period_times
+    if timezone == "Asia/Shanghai":
+        clocks["preset"] = _PRESET_TIMES
+    return {key: values for key, values in clocks.items() if _clocks_fit(known, values)}
+
+
+def group_clock_defaults(cards, timetable=None):
+    """Fill missing clocks only when the members' supplied clocks remain valid."""
+    if not cards:
+        return {}
+    known = next((card.period_times for card in cards if card.period_times), {})
+    if len(known) == 12 or any(card.period_times and card.period_times != known for card in cards):
+        return {}
+    combined = dict(known)
+    for values in group_clock_options(known, cards[0].timezone, timetable).values():
+        if _clocks_fit(combined, values):
+            combined.update(values)
+    return combined if combined != known else {}
+
+
+def apply_group_clocks(cards, clocks):
+    if any(clocks.get(period) != span for card in cards for period, span in card.period_times.items()):
+        raise GroupError("本次组队作息与成员已有作息不一致, 请重新查询共同空闲.")
+    return [replace(card, period_times=clocks) for card in cards]
 
 
 def render_heatmap(result: GroupResult, out) -> Path:
@@ -224,12 +274,28 @@ def render_heatmap(result: GroupResult, out) -> Path:
     return path
 
 
-def available_slot(result: GroupResult, day: int, first: int, last: int):
-    """Resolve a selected green cell or range to an actual date and clock span."""
+def require_free_slot(result: GroupResult, day: int, first: int, last: int):
+    """Check the selected cells even when no clock times are available."""
     if not 0 <= day < 7 or not 1 <= first <= last <= 12:
         raise GroupError("请选择有效的日期和节次.")
     if any(result.counts[day * 12 + period - 1] for period in range(first, last + 1)):
         raise GroupError("这个范围包含忙碌节次, 请重新选择.")
+
+
+def pick_grid_slot(result: GroupResult, day: int, period: int, *, prefer_pair=True):
+    """Prefer the fixed two-period block when both cells are free."""
+    require_free_slot(result, day, period, period)
+    first = ((period - 1) // 2) * 2 + 1
+    last = first + 1
+    offset = day * 12
+    if prefer_pair and not any(result.counts[offset + first - 1:offset + last]):
+        return FreeWindow(day, first, last)
+    return FreeWindow(day, period, period)
+
+
+def available_slot(result: GroupResult, day: int, first: int, last: int):
+    """Resolve a selected green cell or range to an actual date and clock span."""
+    require_free_slot(result, day, first, last)
     calendar = SemesterCalendar(result.monday, 1, result.period_times, result.timezone)
     return calendar.datetime_for(1, day, first, last)
 

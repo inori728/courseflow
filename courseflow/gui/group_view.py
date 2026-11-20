@@ -13,9 +13,8 @@ import json
 import customtkinter as ctk
 
 from .. import service
-from ..group import available_slot
+from ..group import apply_group_clocks, available_slot, group_clock_defaults, pick_grid_slot
 from ..model import DAYS
-from ..semester import SemesterCalendar
 from .dialogs import ACCENT, Button, OptionMenu, INK, MUTED, CourseDialog, Modal, SemesterDialog, TextDialog, label
 from .styles import LIGHT, LIGHT_ACTIVE, LIGHT_HOVER
 
@@ -163,11 +162,13 @@ class MeetingDialog(Modal):
 
 class ActivityDialog(Modal):
     def __init__(self, view, day, period, last):
-        self.begin, self.end = available_slot(view.result, day, period, last)
-        super().__init__(view.app, "添加事件", 560, 350)
-        self.day, self.period, self.last = day, period, last
-        label(self, "添加事件", 23).pack(anchor="w", padx=24, pady=(24, 6))
-        label(self, f"{self.begin:%Y-%m-%d} {DAYS[day]} {self.begin:%H:%M}-{self.end:%H:%M}",
+        self.availability = view.result
+        self.begin, self.end = available_slot(self.availability, day, period, last)
+        super().__init__(view.app, "添加个人课表活动", 560, 405)
+        self.period, self.last = period, last
+        label(self, "添加个人课表活动", 23).pack(anchor="w", padx=24, pady=(24, 6))
+        periods = str(period) if period == last else f"{period}-{last}"
+        label(self, f"{self.begin:%Y-%m-%d} {DAYS[day]} 第 {periods} 节 {self.begin:%H:%M}-{self.end:%H:%M}",
               14, MUTED).pack(anchor="w", padx=24, pady=(0, 14))
         label(self, "活动名称").pack(anchor="w", padx=24)
         self.activity_name = ctk.CTkEntry(self, height=34)
@@ -175,18 +176,19 @@ class ActivityDialog(Modal):
         label(self, "地点 (选填)").pack(anchor="w", padx=24)
         self.room = ctk.CTkEntry(self, height=34)
         self.room.pack(fill="x", padx=24, pady=(4, 10))
-        Button(self, text="保存到我的课表", fg_color=ACCENT, command=self.save).pack(anchor="e", padx=24, pady=14)
+        label(self, "保存会在个人课表留出这段时间. 制定小组日程会打开议程和分工编辑.",
+              12, MUTED, wraplength=510, justify="left").pack(anchor="w", padx=24)
+        actions = ctk.CTkFrame(self, fg_color="transparent")
+        actions.pack(fill="x", padx=24, pady=14)
+        Button(actions, text="制定小组日程", fg_color=LIGHT, text_color=INK,
+               command=lambda: (self.close(), view.plan(day, period, last))).pack(side="left")
+        Button(actions, text="保存到我的课表", fg_color=ACCENT, command=self.save).pack(side="right")
 
     def save(self):
         try:
             app = self.app
-            calendar = SemesterCalendar.from_timetable(app.tt)
-            week = (self.begin.date() - calendar.start).days // 7 + 1
-            begin, end = calendar.datetime_for(week, self.day, self.period, self.last)
-            if (begin, end) != (self.begin, self.end):
-                raise ValueError("成员时段与我的课表作息不一致, 请核对后再添加.")
             tt, week = service.add_group_activity(app.tt, self.begin.date(), self.period, self.last,
-                                                  self.activity_name.get(), self.room.get())
+                                                  self.activity_name.get(), self.room.get(), group=self.availability)
             app.persist_timetable(tt)
             app.review_week, app.review_period, app.review_tab = week, self.period, "周课表"
             self.close()
@@ -214,6 +216,8 @@ class GroupView(ctk.CTkFrame):
             state = "disabled" if requires_current and not app.tt.courses else "normal"
             Button(left, text=text, height=32, fg_color=LIGHT, text_color=ACCENT,
                    state=state, command=callback).pack(fill="x", padx=12, pady=4)
+        label(left, "用浏览器填写点格页. 填好后, 添加下载的 .busycard 文件或粘贴 CF1 短码.",
+              12, MUTED, wraplength=230, justify="left").pack(anchor="w", padx=12, pady=(8, 0))
         if not app.tt.courses:
             label(left, "当前还没有课表. 可先到导入页准备自己的课表, 或直接添加成员文件 / 忙闲卡.",
                   12, MUTED, wraplength=230, justify="left").pack(anchor="w", padx=12, pady=(10, 0))
@@ -265,7 +269,10 @@ class GroupView(ctk.CTkFrame):
         self.export_meeting_button.pack(side="left", padx=(0, 8))
         self.heatmap_button = Button(footer, text="导出热力图", width=120, fg_color="#edf1fa", text_color=ACCENT, state="disabled", command=self.heatmap)
         self.heatmap_button.pack(side="left")
+        label(footer, "会议日历可导入日历应用.", 12, MUTED).pack(side="left", padx=10)
         self.result = None
+        self.prefer_pair = tk.BooleanVar(value=True)
+        self.personal_activity = tk.BooleanVar(value=False)
 
     def add_current(self):
         if not self.app.tt.courses:
@@ -365,15 +372,36 @@ class GroupView(ctk.CTkFrame):
             del self.app.members[index]
             self.app.go("group")
 
+    def current_cards(self, *, use_defaults=True):
+        app = self.app
+        cards = list(app.members)
+        for index, card in enumerate(cards):
+            if card.name == app.group_current_member:
+                tt = app.tt
+                if not app.dirty and app.saved_signature != service.file_signature(app.source):
+                    tt = service.load_timetable_snapshot(app.source)[0]
+                cards[index] = service.make_busy_card(tt, card.name, campus=card.campus)
+        if use_defaults:
+            defaults = group_clock_defaults(cards, app.tt)
+            if defaults:
+                return apply_group_clocks(cards, defaults)
+        return cards
+
     def find(self):
         try:
-            for index, card in enumerate(self.app.members):
-                if card.name == self.app.group_current_member:
-                    self.app.members[index] = service.make_busy_card(self.app.tt, card.name, campus=card.campus)
-            self.result = service.group_free(self.app.members, int(self.week.get()), int(self.minimum.get()))
+            cards = self.current_cards(use_defaults=False)
+            defaults = group_clock_defaults(cards, self.app.tt)
+            effective = apply_group_clocks(cards, defaults) if defaults else cards
+            self.result = service.group_free(effective, int(self.week.get()), int(self.minimum.get()))
+            self.app.members[:] = cards
             self.app.last_group_result = self.result
             result = self.result
-            self.summary.configure(text=f"{result.monday.isoformat()} 起 / {len(result.names)} 位成员\n" + "\n".join(result.warnings + ([result.campus_hint] if result.campus_hint else [])))
+            details = result.warnings + ([result.campus_hint] if result.campus_hint else [])
+            if defaults:
+                details.append("已为缺失的钟点带入默认作息. 可在我的课表中的学期与作息修改.")
+            if not result.period_times:
+                details.append("可按节次查看空闲. 安排日程前, 请补齐成员作息或导入带作息的忙闲卡.")
+            self.summary.configure(text="\n".join([f"{result.monday.isoformat()} 起 / {len(result.names)} 位成员", *details]))
             for name in ("全员空闲", "热力图"):
                 for child in self.tabs.tab(name).winfo_children():
                     child.destroy()
@@ -385,20 +413,26 @@ class GroupView(ctk.CTkFrame):
                 row.pack(fill="x", padx=15, pady=6)
                 ctk.CTkRadioButton(row, text=window.describe(), variable=self.selected, value=index,
                                    font=("Microsoft YaHei UI", 14)).pack(side="left")
-                Button(row, text="添加活动", width=80, fg_color=LIGHT, text_color=INK,
+                Button(row, text="添加到课表", width=88, fg_color=LIGHT, text_color=INK,
                        command=lambda item=window: self.activity(item.day, item.start, item.end)).pack(side="right")
+                Button(row, text="制定日程", width=80, fg_color=LIGHT, text_color=INK,
+                       command=lambda item=window: self.plan(item.day, item.start, item.end)).pack(side="right", padx=6)
             if not result.windows:
                 label(panel, "没有满足条件的全员空闲时段.", 14, MUTED).pack(pady=35)
             grid = ctk.CTkScrollableFrame(self.tabs.tab("热力图"), fg_color="transparent")
             grid.pack(fill="both", expand=True)
-            label(grid, "绿色 = 全员空闲; 数字 = 这一节忙碌的人数", 12, MUTED).grid(
-                row=0, column=0, columnspan=8, sticky="w", padx=6, pady=(6, 8))
+            ctk.CTkCheckBox(grid, text="优先选同组两节", variable=self.prefer_pair).grid(
+                row=0, column=0, columnspan=4, sticky="w", padx=6, pady=(6, 2))
+            ctk.CTkCheckBox(grid, text="点格时添加个人课表活动", variable=self.personal_activity).grid(
+                row=0, column=4, columnspan=4, sticky="w", padx=6, pady=(6, 2))
+            label(grid, "点击空闲格打开小组日程. 同组两节都空闲时一起选.", 12, MUTED).grid(
+                row=1, column=0, columnspan=8, sticky="w", padx=6, pady=(2, 8))
             for day in range(7):
-                label(grid, DAYS[day], 11).grid(row=1, column=day + 1, padx=3, pady=8)
+                label(grid, DAYS[day], 11).grid(row=2, column=day + 1, padx=3, pady=8)
             for period in range(1, 13):
                 span = result.period_times.get(period)
                 clock = f"\n{span[0]:%H:%M}-{span[1]:%H:%M}" if span else ""
-                label(grid, f"{period}{clock}", 11, MUTED).grid(row=period + 1, column=0, padx=6)
+                label(grid, f"{period}{clock}", 11, MUTED).grid(row=period + 2, column=0, padx=6)
                 for day in range(7):
                     count = result.counts[day * 12 + period - 1]
                     color = "#d9f3e7" if count == 0 else "#dce4f6"
@@ -408,18 +442,39 @@ class GroupView(ctk.CTkFrame):
                     else:
                         cell = Button(grid, text="空闲", width=58, height=28, fg_color=color, text_color="#31644e",
                                       hover_color="#c6ecda", font=("Microsoft YaHei UI", 11),
-                                      command=lambda d=day, p=period: self.activity(d, p))
-                    cell.grid(row=period + 1, column=day + 1, padx=2, pady=2)
+                                      command=lambda d=day, p=period: self.select_grid_slot(d, p))
+                    cell.grid(row=period + 2, column=day + 1, padx=2, pady=2)
             self.export_meeting_button.configure(state="normal" if result.windows else "disabled")
             self.heatmap_button.configure(state="normal")
-        except ValueError as exc:
+        except (ValueError, OSError) as exc:
             messagebox.showerror("无法求交", str(exc), parent=self.app)
 
     def activity(self, day, period, last=None):
         try:
-            ActivityDialog(self, day, period, last or period)
+            if last is None:
+                slot = pick_grid_slot(self.result, day, period, prefer_pair=self.prefer_pair.get())
+                period, last = slot.start, slot.end
+            ActivityDialog(self, day, period, last)
         except ValueError as exc:
             messagebox.showerror("无法选择时段", str(exc), parent=self.app)
+
+    def select_grid_slot(self, day, period):
+        try:
+            slot = pick_grid_slot(self.result, day, period, prefer_pair=self.prefer_pair.get())
+        except ValueError as exc:
+            messagebox.showerror("无法选择时段", str(exc), parent=self.app)
+            return
+        open_slot = self.activity if self.personal_activity.get() else self.plan
+        open_slot(day, slot.start, slot.end)
+
+    def plan(self, day, first, last):
+        from .group_schedule import GroupScheduleDialog
+
+        try:
+            result = service.group_free(self.current_cards(), self.result.week, 1)
+            GroupScheduleDialog(self, result, day, first, last)
+        except (ValueError, OSError) as exc:
+            messagebox.showerror("无法制定日程", str(exc), parent=self.app)
 
     def meeting(self):
         if self.result and self.result.windows:

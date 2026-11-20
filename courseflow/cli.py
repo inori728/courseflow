@@ -187,6 +187,10 @@ def cmd_calendar(args) -> int:
 
 def cmd_holidays(args) -> int:
     print("= 放假 / 调休提醒 =")
+    if args.import_data:
+        target = service.import_holiday_data(args.import_data, expected_year=args.year)
+        print(f"已导入本地放假数据:{target}")
+        return 0
     source = Path(args.file or DEFAULT_SOURCE)
     tt = service.load_timetable(source)
     for w in tt.warnings:
@@ -210,7 +214,7 @@ def _add_render_flags(sp: argparse.ArgumentParser, with_file: bool = True) -> No
     sp.add_argument("--size", choices=["both", "desktop", "phone"], default="both",
                     help="出图尺寸:both=电脑+手机(默认),desktop,phone")
     sp.add_argument("--bg", default="dusk",
-                    help="内置背景:dusk 黄昏晚霞(默认)/ night 深夜星河 / sea 海盐渐变 / purple 暮紫渐变")
+                    help="内置背景:dusk 樱花电车(默认)/ night 月夜海岸 / sea 海边教室 / purple 山间静湖")
     sp.add_argument("-o", "--out", help="输出文件夹(默认:桌面\\课表壁纸)")
     sp.add_argument("--no-open", action="store_true", help="出图后不自动打开文件夹")
     sp.add_argument("--week", type=int, help="仅显示这一周的实际安排")
@@ -261,6 +265,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("holidays", help="提醒法定节假日 / 调休上班日(只提醒,不改课表)")
     sp.add_argument("-f", "--file", help="课表源文件(默认 课表.yaml)")
     sp.add_argument("--year", type=int, help="指定年份(默认按学期起始日期推断)")
+    sp.add_argument("--import-data", help="校验并导入本地放假 JSON, 供以后查询使用")
 
     from .extra_cli import register
     register(sub)

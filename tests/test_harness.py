@@ -1,5 +1,6 @@
 import base64
-from datetime import date, datetime, timezone
+from dataclasses import replace
+from datetime import date, datetime, time, timedelta, timezone
 from io import BytesIO
 import os
 from pathlib import Path
@@ -7,7 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from PIL import Image
+from PIL import Image, ImageChops, ImageStat
 
 from courseflow import service
 from courseflow.backgrounds import BACKGROUNDS, make_background
@@ -179,6 +180,182 @@ class HarnessTests(unittest.TestCase):
         restored = self.invoke("group_refresh", token=searched["token"])
         self.assertEqual(restored["counts"][4 * 12 + 6:4 * 12 + 8], [0, 0])
 
+    def test_single_week_busy_card_defaults_to_its_coverage(self):
+        card = service.make_busy_card(self.tt, "虚构组员", weeks=[12])
+        with patch("courseflow.harness_commands.local_today", return_value=date(2026, 12, 2)):
+            for text, expected in (("", 12), ("查第13周", 13), ("查本周", 13), ("查下周", 14)):
+                with self.subTest(text=text):
+                    prepared = self.invoke("request", mode="group", text=text, shortcodes=[card.encode()])
+                    self.assertEqual(prepared["week"], expected)
+
+    def test_next_searches_files_and_shortcodes_together_in_addition_order(self):
+        first = service.make_busy_card(replace(self.tt, courses=[]), "成员一", weeks=[7])
+        later_anchor = self.tt.semester_start + timedelta(weeks=1)
+        second = service.make_busy_card(replace(self.tt, courses=[], semester_start=later_anchor), "成员二", weeks=[6])
+        third = service.make_busy_card(replace(self.tt, courses=[]), "成员三", weeks=[7])
+        first.busy[7].add(0)
+        second.busy[6].add(2)
+        third.busy[7].add(4)
+        files = [{"name": "成员忙闲卡.busycard", "base64": base64.b64encode(card.encode().encode()).decode()}
+                 for card in (first, third)]
+        queued = {"mode": "group", "search_now": True, "files": files, "shortcodes": [second.encode()],
+                  "member_order": ["file", "code", "file"]}
+        group = self.invoke("request", **queued)
+        self.assertEqual((group["type"], group["week"]), ("group_result", 7))
+        self.assertEqual(group["names"], ["成员一", "成员二", "成员三"])
+        self.assertEqual(group["counts"][:6], [1, 0, 1, 0, 1, 0])
+
+        review = self.invoke("request", **queued, text="查第8周共同空闲")
+        self.assertEqual(review["type"], "group_prepare")
+        self.assertEqual([member["name"] for member in review["members"]], group["names"])
+        self.assertIn("没有提供第 8 周", review["warning"])
+        self.assertEqual(self.invoke("group_search", token=review["token"], week=7,
+                                     members=[{"name": name} for name in group["names"]])["counts"], group["counts"])
+
+    def test_direct_schedule_selection_reuses_pair_and_continues_after_clock_review(self):
+        self.source.unlink()
+        preset_card = service.make_busy_card(replace(self.tt, courses=[], period_times={}), "虚构组员", weeks=[7])
+        group = self.invoke("request", mode="group", shortcodes=[preset_card.encode()], search_now=True)
+        schedule = self.invoke("request", group_token=group["token"], text="选空档 周三第7小节 优先连堂 并打开日程")
+        self.assertEqual(schedule["type"], "schedule")
+        self.assertEqual((schedule["draft"]["start"], schedule["draft"]["end"]), ("16:00", "17:40"))
+        self.assertTrue(schedule["activity_token"])
+        self.assertFalse(self.source.exists())
+
+        card = replace(preset_card, period_times={1: (time(8, 10), time(8, 50))})
+        group = self.invoke("request", mode="group", shortcodes=[card.encode()], search_now=True)
+        clock_review = self.invoke("activity_preview", group_token=group["token"], day=2, start=1, end=2,
+                                   open_schedule=True)
+        self.assertTrue(clock_review["open_schedule"])
+        self.assertTrue(clock_review["needs_clocks"])
+        schedule = self.invoke("activity_clocks", slot=clock_review["token"], clocks={"2": "08:55-09:35"})
+        self.assertEqual(schedule["type"], "schedule")
+        self.assertEqual((schedule["draft"]["start"], schedule["draft"]["end"]), ("08:10", "09:35"))
+        self.assertEqual(schedule["group"]["names"], [card.name])
+
+    def test_group_reports_semester_length_and_can_retry_same_query_after_correction(self):
+        card = service.make_busy_card(replace(self.tt, courses=[]), "虚构组员", weeks=[12])
+        card.busy[12].add(12)
+        self.tt.courses.append(Course("虚构跨周课程", 0, 5, 6, "示例教室", "4-19周"))
+        save_source(self.tt, self.source)
+        prepared = self.invoke("request", mode="group", text="查第12周", shortcodes=[card.encode()], include_self=True)
+        context = {"group_prepare": prepared["token"]}
+        with self.assertRaisesRegex(ValueError, "学期总周数为 16 周.*第 19 周"):
+            self.invoke("request", text="确认组队", workbench=context)
+        save_source(replace(self.tt, weeks_total=19), self.source)
+        group = self.invoke("request", text="确认组队", workbench=context)
+        self.assertEqual(group["week"], 12)
+        self.assertEqual(group["counts"][4:6], [1, 1])
+        self.assertEqual(group["counts"][12], 1)
+        with self.assertRaisesRegex(ValueError, r"没有提供第 13 周.*2026-11-30"):
+            self.invoke("request", text="确认组队 第13周", workbench=context)
+
+    def test_clockless_busy_card_uses_compatible_personal_clocks_by_default(self):
+        self.tt.period_times[7] = (time(16, 5), time(16, 50))
+        save_source(self.tt, self.source)
+        original = self.source.read_bytes()
+        member = service.make_busy_card(replace(self.tt, period_times={}), "虚构组员", weeks=[7])
+        prepared = self.invoke("request", text=f"查第7周共同空闲 {member.encode()}")
+        group = self.invoke("group_search", token=prepared["token"], week=7, members=[{"name": member.name}])
+        self.assertEqual(group["clock_source"], "default")
+        self.assertEqual(group["clocks"]["7"], "16:05-16:50")
+        with self.assertRaisesRegex(ValueError, "忙碌"):
+            self.invoke("activity_preview", group_token=group["token"], day=1, start=3, end=4)
+        selected = self.invoke("request", text="选空档 周三 1-2节", group_token=group["token"])
+        self.assertIn("第 1-2 节", selected["label"])
+        self.assertFalse(selected["needs_clocks"])
+        self.assertIn("08:00-09:40", selected["label"])
+        self.assertEqual(selected["clock_choices"]["personal"]["1"], SCHOOL_CLOCKS[1])
+
+        context = {"activity": selected["token"]}
+        timed = self.invoke("request", text="确认组队作息 我的课表", workbench=context)
+        self.assertFalse(timed["needs_clocks"])
+        self.assertIn("08:00-09:40", timed["label"])
+        self.assertEqual(timed["group"]["counts"], group["counts"])
+        self.assertEqual(timed["group_token"], timed["group"]["token"])
+        self.assertEqual(self.source.read_bytes(), original)
+
+        draft = self.invoke("request", text="制定小组日程", workbench={"activity": selected["token"]})
+        self.assertEqual((draft["draft"]["start"], draft["draft"]["end"]), ("08:00", "09:40"))
+        edited = self.invoke("schedule", operation="save", token=draft["token"],
+                             draft={**draft["draft"], "title": "虚构讨论", "end": "09:30"})
+        self.assertEqual(edited["draft"]["end"], "09:30")
+        saved = self.invoke("activity", slot=timed["token"], title="虚构讨论", export_ics=True)
+        self.assertTrue(saved["updated"])
+        calendar = (self.harness.exports / saved["files"][0]["id"]).read_text(encoding="utf-8")
+        self.assertIn("DTSTART:20261021T000000Z", calendar)
+
+    def test_group_clock_confirmation_preserves_custom_member_times(self):
+        self.source.unlink()
+        first = (time(8, 10), time(8, 50))
+        member = service.make_busy_card(replace(self.tt, period_times={1: first}),
+                                        "虚构组员", weeks=[7])
+        prepared = self.invoke("request", text=f"查第7周共同空闲 {member.encode()}")
+        group = self.invoke("request", text="确认组队", workbench={"group_prepare": prepared["token"]})
+        selected = self.invoke("activity_preview", group_token=group["token"], day=2, start=1, end=2)
+        self.assertTrue(selected["needs_clocks"])
+        self.assertEqual(selected["clock_choices"], {})
+        with self.assertRaisesRegex(ValueError, "缺少"):
+            self.invoke("activity_clocks", slot=selected["token"], clocks={"3": "10:00-10:45"})
+        with self.assertRaisesRegex(ValueError, "已有"):
+            self.invoke("activity_clocks", slot=selected["token"], clocks={"1": "08:10-08:45", "2": "08:55-09:35"})
+        with self.assertRaisesRegex(ValueError, "重叠"):
+            self.invoke("activity_clocks", slot=selected["token"], clocks={"2": "08:40-09:35"})
+        timed = self.invoke("activity_clocks", slot=selected["token"], clocks={"2": "08:55-09:35"})
+        self.assertEqual(timed["group"]["clocks"], {"1": "08:10-08:50", "2": "08:55-09:35"})
+        self.assertFalse(timed["needs_clocks"])
+        self.assertEqual(self.invoke("group_refresh", token=timed["group_token"])["clocks"], timed["group"]["clocks"])
+        with self.assertRaisesRegex(ValueError, "先导入"):
+            self.invoke("activity", slot=timed["token"], title="虚构讨论")
+        self.assertFalse(self.source.exists())
+        with self.assertRaisesRegex(ValueError, "没有可采用"):
+            self.invoke("request", text="确认组队作息 预设", workbench={"activity": selected["token"]})
+        export = self.invoke("point_grid", token=timed["group_token"])
+        page = (self.harness.exports / export["files"][0]["id"]).read_text(encoding="utf-8")
+        self.assertIn("08:55-09:35", page)
+        self.assertNotIn(member.name, page)
+
+    def test_grid_pair_uses_default_school_clocks_and_never_selects_a_busy_neighbor(self):
+        timetable = replace(self.tt, period_times={})
+        save_source(timetable, self.source)
+        card = service.make_busy_card(replace(timetable, courses=[]), "虚构组员", weeks=[7])
+        card.busy[7].add(3)
+        prepared = self.invoke("request", mode="group", shortcodes=[card.encode()], include_self=True)
+        group = self.invoke("request", text="确认组队", workbench={"group_prepare": prepared["token"]})
+        self.assertEqual(group["clocks"]["7"], SCHOOL_CLOCKS[7])
+        self.assertEqual(group["clocks"]["8"], SCHOOL_CLOCKS[8])
+
+        for period, expected in ((3, (3, 4)), (4, (3, 4)), (5, (5, 6)), (8, (7, 8)), (12, (11, 12))):
+            with self.subTest(period=period):
+                slot = self.invoke("activity_preview", group_token=group["token"], day=6, start=period, end=period,
+                                   prefer_pair=True)
+                self.assertEqual((slot["fields"]["start"], slot["fields"]["end"]), expected)
+        single = self.invoke("request", text="选空档 周日第5小节", group_token=group["token"])
+        self.assertEqual((single["fields"]["start"], single["fields"]["end"]), (5, 5))
+        fallback = self.invoke("request", text="选空档 周一第3小节 优先连堂", group_token=group["token"])
+        self.assertEqual((fallback["fields"]["start"], fallback["fields"]["end"]), (3, 3))
+        self.assertIn("第 4 节有人忙", fallback["pair_note"])
+        with self.assertRaisesRegex(ValueError, "忙碌"):
+            self.invoke("request", text="选空档 周一第2大节", group_token=group["token"])
+
+        selected = self.invoke("request", text="选空档 周三第7小节 优先连堂", group_token=group["token"])
+        self.assertIn("第 7-8 节 16:00-17:40", selected["label"])
+        self.assertFalse(selected["needs_clocks"])
+        changed = self.invoke("activity_clocks", slot=selected["token"], clocks={"7": "16:05-16:50"})
+        self.assertIn("第 7-8 节 16:05-17:40", changed["label"])
+        self.assertEqual(changed["group"]["clock_source"], "custom")
+        self.assertEqual(changed["group"]["clocks"]["8"], SCHOOL_CLOCKS[8])
+        plan = self.invoke("request", text="制定小组日程", workbench={"activity": changed["token"]})
+        self.assertEqual((plan["draft"]["start"], plan["draft"]["end"]), ("16:05", "17:40"))
+        saved = self.invoke("activity", slot=changed["token"], title="虚构组队活动", export_ics=True)
+        updated = service.load_timetable(self.source)
+        self.assertEqual(updated.period_times, {})
+        event = next(course for course in updated.courses if course.kind == "activity")
+        self.assertEqual((event.start, event.end), (7, 8))
+        calendar = (self.harness.exports / saved["files"][0]["id"]).read_text(encoding="utf-8")
+        self.assertIn("DTSTART:20261021T080500Z", calendar)
+        self.assertIn("DTEND:20261021T094000Z", calendar)
+
     def test_sidebar_import_updates_shared_timetable_only_after_confirmation(self):
         original = self.source.read_bytes()
         self.tt.term = "侧栏导入"
@@ -297,21 +474,30 @@ class HarnessTests(unittest.TestCase):
             prepared = self.invoke("request", mode="export", formats=["desktop", "phone"], wallpaper=wallpaper)
             recognize.assert_not_called()
         self.assertEqual(prepared["wallpaper_background"], background["name"])
-        preview = Harness().run("preview", {"token": prepared["token"]})
+        with patch("courseflow.render.desktop_size", return_value=(800, 600)):
+            preview = Harness().run("preview", {"token": prepared["token"]})
         self.assertEqual(preview["wallpaper_background"], background["name"])
+        self.assertEqual(list(preview["wallpaper_previews"]), ["desktop", "phone"])
         self.assertFalse(self.harness.exports.exists())
+        self.assertEqual(self.source.read_bytes(), original)
         with patch("courseflow.render.desktop_size", return_value=(800, 600)):
             saved = Harness().run("commit", {"token": preview["confirmation"]})
         self.assertEqual(len(saved["files"]), 2)
-        for file in saved["files"]:
-            with Image.open(self.harness.exports / file["id"]) as wallpaper_image:
+        for fmt, file in zip(("desktop", "phone"), saved["files"]):
+            raw_preview = base64.b64decode(preview["wallpaper_previews"][fmt])
+            with Image.open(self.harness.exports / file["id"]) as wallpaper_image, Image.open(BytesIO(raw_preview)) as thumb:
                 self.assertEqual(wallpaper_image.getpixel((0, 0)), (37, 99, 148))
+                wallpaper_image.thumbnail((1280, 1280), Image.Resampling.LANCZOS)
+                self.assertEqual(thumb.size, wallpaper_image.size)
+                difference = ImageChops.difference(thumb, wallpaper_image)
+                self.assertLess(max(ImageStat.Stat(difference).mean), 4)
         self.assertEqual(self.source.read_bytes(), original)
 
     def test_wallpaper_export_uses_selected_preset(self):
         prepared = self.invoke("request", mode="export", formats=["desktop"], wallpaper={"background": "sea"})
         preview = self.invoke("preview", token=prepared["token"])
-        self.assertEqual(preview["wallpaper_background"], "海盐渐变")
+        self.assertEqual(preview["wallpaper_background"], BACKGROUNDS["sea"])
+        self.assertEqual(list(preview["wallpaper_previews"]), ["desktop"])
         size = (800, 600)
         with patch("courseflow.render.desktop_size", return_value=size):
             saved = self.invoke("commit", token=preview["confirmation"])
@@ -321,7 +507,7 @@ class HarnessTests(unittest.TestCase):
     def test_wallpaper_background_preview_uses_selected_preset_and_dimensions(self):
         original = self.source.read_bytes()
         size = (960, 540)
-        with patch("courseflow.harness.desktop_size", return_value=(1920, 1080)):
+        with patch("courseflow.render.desktop_size", return_value=(1920, 1080)):
             for background in BACKGROUNDS:
                 with self.subTest(background=background):
                     preview = self.invoke("wallpaper_background_preview", background=background, format="desktop")
@@ -342,6 +528,97 @@ class HarnessTests(unittest.TestCase):
             with self.assertRaises(SettingsRequired):
                 self.invoke("request", text="导出课表", files=[{"path": str(image), "name": image.name}])
             recognize.assert_not_called()
+
+    def test_command_adjustment_can_select_confirm_and_undo_without_writing_early(self):
+        original = self.source.read_bytes()
+        result = self.invoke("request", text="把第7周的体育课调到周六第1大节")
+        context = {"prepared": result["token"]}
+        preview = self.invoke("request", text="预览调课", workbench=context)
+        self.assertEqual(len(preview["candidates"]), 2)
+        context["candidates"] = [item["id"] for item in preview["candidates"]]
+        preview = self.invoke("request", text="选课次 2", workbench=context)
+        context["confirmation"] = preview["confirmation"]
+        self.assertEqual(self.source.read_bytes(), original)
+        with self.assertRaisesRegex(ValueError, "确认调课"):
+            self.invoke("request", text="确认导出", workbench=context)
+        self.assertTrue(self.invoke("request", text="确认调课", workbench=context)["updated"])
+        self.assertNotEqual(self.source.read_bytes(), original)
+        self.assertTrue(self.invoke("request", text="撤销上一步")["updated"])
+        self.assertEqual(self.source.read_bytes(), original)
+
+    def test_command_reserving_todo_respects_busy_slots_even_without_self_in_group(self):
+        original = self.source.read_bytes()
+        todo = self.invoke("request", text="添加待做任务 2026-10-23前交实验报告")["items"][0]
+        done = self.invoke("request", text="完成待办 交实验报告")
+        self.assertTrue(done["items"][0]["done"])
+        reopened = self.invoke("request", text="重新打开待办 交实验报告")
+        self.assertFalse(reopened["items"][0]["done"])
+        card = service.make_busy_card(replace(self.tt, courses=[]), "虚构组员", [7])
+        prepared = self.invoke("request", text=f"查第7周共同空闲 {card.encode()}")
+        group = self.invoke("request", text="确认组队", workbench={"group_prepare": prepared["token"]})
+        reserve = self.invoke("request", text="给待办 交实验报告 留出时间", group_token=group["token"])
+        self.assertEqual(reserve["item"]["id"], todo["id"])
+        context = {"todo_id": todo["id"]}
+        clash = self.invoke("request", text="选空档 周二 3-4节", group_token=group["token"], workbench=context)
+        with self.assertRaisesRegex(ValueError, "重叠"):
+            self.invoke("request", text="确认留出时间", workbench={"activity": clash["token"]})
+        self.assertEqual(self.source.read_bytes(), original)
+        free = self.invoke("request", text="选空档 周三 1-2节", group_token=group["token"], workbench=context)
+        saved = self.invoke("request", text="确认添加活动 地点:虚构研讨室 并导出日历", workbench={"activity": free["token"]})
+        self.assertTrue(saved["updated"])
+        self.assertTrue(saved["files"][0]["name"].endswith(".ics"))
+        activity = next(course for course in service.load_timetable(self.source).courses if course.kind == "activity")
+        self.assertEqual((activity.name, activity.day, activity.start, activity.room), (todo["title"], 2, 1, "虚构研讨室"))
+        self.assertFalse(self.invoke("request", text="查看待办")["items"][0]["done"])
+
+    def test_command_manual_group_schedule_and_card(self):
+        original = self.source.read_bytes()
+        card = service.make_busy_card(replace(self.tt, courses=[]), "甲", [7])
+        ready = self.invoke("request", text=f"查第7周空闲 {card.encode()}")
+        group = self.invoke("request", text="确认组队 第7周", workbench={"group_prepare": ready["token"]})
+        chosen = self.invoke("request", text="选空档 周三 1-2节", group_token=group["token"])
+        result = self.invoke("request", text="制定小组日程", workbench={"activity": chosen["token"]})
+        for line in ("设置日程 事项:虚构讨论 | 地点:研讨室 | 结束:08:40", "添加议程 10 | 复盘错题", "添加分工 甲 | 准备例题"):
+            result = self.invoke("request", text=line, schedule_token=result["token"])
+        self.assertEqual(result["draft"]["end"], "08:40")
+        self.assertEqual(result["draft"]["agenda"][0]["minutes"], 10)
+        self.assertEqual(result["draft"]["prep"][0]["owners"], ["甲"])
+        result = self.invoke("request", text="预览日程卡 简洁清单", schedule_token=result["token"])
+        self.assertEqual(result["style"], "simple")
+        result = self.invoke("request", text="导出日程卡 简洁清单", schedule_token=result["token"])
+        self.assertTrue(result["files"][0]["name"].endswith("简洁清单.png"))
+        self.assertEqual(self.source.read_bytes(), original)
+
+    def test_command_view_controls_settings_and_semester_confirmation(self):
+        week = self.invoke("request", text="周课表网格", workbench={"agenda_week": 7})
+        self.assertEqual((week["week"], week["view_mode"]), (7, "week"))
+        self.assertEqual(self.invoke("request", text="下一周", workbench={"agenda_week": 7})["week"], 8)
+        self.assertEqual(self.invoke("request", text="刷新课表")["view"], "agenda")
+        self.assertEqual(self.invoke("request", text="打开 AI 接口设置")["type"], "settings")
+        with patch("courseflow.service.ai_settings", return_value=AIConfig()), self.assertRaises(SettingsRequired):
+            self.invoke("request", text="自检 AI 接口")
+        original = self.source.read_bytes()
+        week = self.invoke("request", text="设置当前周次 7")
+        self.assertEqual(week["suggested_week"], 7)
+        self.assertEqual(self.source.read_bytes(), original)
+        saved = self.invoke("request", text="确认周次", workbench={"semester": week["token"], "suggested_week": 7})
+        self.assertEqual(saved["type"], "saved")
+
+    def test_command_wallpaper_background_and_export_share_confirmation(self):
+        picture = self.home / "background.png"
+        Image.new("RGB", (20, 20), (20, 30, 40)).save(picture)
+        source = self.source.read_bytes()
+        with patch.object(Harness, "require_vision") as vision:
+            prepared = self.invoke("request", text="导出手机壁纸 用附件作为壁纸背景",
+                                   files=[{"path": str(picture), "name": picture.name}])
+            vision.assert_not_called()
+        self.assertEqual(prepared["wallpaper_background"], picture.name)
+        preview = self.invoke("request", text="预览导出", workbench={"prepared": prepared["token"]})
+        self.assertEqual(list(preview["wallpaper_previews"]), ["phone"])
+        with patch("courseflow.render.PHONE_SIZE", (640, 1024)):
+            exported = self.invoke("request", text="确认导出", workbench={"confirmation": preview["confirmation"]})
+        self.assertTrue(exported["files"][0]["name"].endswith(".png"))
+        self.assertEqual(self.source.read_bytes(), source)
 
 
 if __name__ == "__main__":

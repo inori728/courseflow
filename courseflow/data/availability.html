@@ -39,13 +39,15 @@
     </div>
     <p id="preset-hint" style="font-size:12px;margin:16px 0 0">请按组长约定核对学期日期和周次, 再填写名称并点格.</p>
     <div class="toolbar">
-      <label class="check"><input type="checkbox" id="pairs" checked>两节连选, 适合连堂课程</label>
-      <button id="clear" type="button">清空所选</button>
+      <label class="check"><input type="checkbox" id="pairs" aria-describedby="pair-hint" checked>两节连选</label>
+      <button id="clear" type="button">清空忙碌标记</button>
     </div>
+    <p id="pair-hint" style="font-size:12px;margin:0 0 10px">勾选时会成对标记, 如第 1-2 节或第 3-4 节. 只想标一节时, 取消勾选.</p>
     <div id="grid" aria-label="每周7天, 每天12节的忙闲格"></div>
     <div class="legend"><span><i class="dot"></i>已标记忙碌 / 其余为该周空闲</span><span id="count">已标记 0 节</span></div>
     <p style="font-size:12px;margin:15px 0">日期和周次请向组长确认. 默认按同校节次对齐; 有午休, 社团等安排也可标为忙碌.</p>
-    <label class="check"><input type="checkbox" id="confirmed">我已核对学期日期, 周次和全部忙闲安排</label>
+    <label class="check"><input type="checkbox" id="confirmed" aria-describedby="confirm-hint">我已核对学期日期, 周次和全部忙闲安排</label>
+    <p id="confirm-hint" style="font-size:12px;margin:8px 0 0">卡片只记录所填周次. 没标记忙碌的格子会算作空闲. 勾选后即可生成忙闲卡, 修改日期 / 周次 / 忙闲格后需要重新勾选.</p>
     <div class="actions"><button class="primary" id="generate" disabled>生成忙闲卡</button></div>
     <div class="status" id="status" role="status" aria-live="polite"></div>
   </section>

@@ -1,20 +1,13 @@
-"""把课表渲染成壁纸(Pillow 纯本地:无 AI,不联网).
-
-样式与效果预研定稿一致(C 方案):
-- 微软雅黑,无文字特效;
-- 课块不透明度 190(可读性优先);
-- 文字颜色按块下的背景亮度自适应(亮底深字 / 暗底白字);
-- 同格多课自动左右分栏.
-"""
+"""Local wallpaper rendering with separate desktop and phone layouts."""
 from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageStat
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
 
-from .backgrounds import make_background
+from .backgrounds import make_background, normalize as normalize_background
 from .model import Course, DAYS, Timetable
 from .schedule import resolve_timetable
 
@@ -116,83 +109,195 @@ def default_wallpaper_dir() -> Path:
     return _desktop_dir() / "课表壁纸"
 
 
-def _cover(img: Image.Image, size: tuple[int, int]) -> Image.Image:
-    """把图按"铺满不留白"裁剪到目标尺寸(居中裁剪)."""
-    W, H = size
-    scale = max(W / img.width, H / img.height)
-    img2 = img.resize(
-        (max(1, round(img.width * scale)), max(1, round(img.height * scale))),
-        Image.Resampling.LANCZOS,
-    )
-    x = (img2.width - W) // 2
-    y = (img2.height - H) // 2
-    return img2.crop((x, y, x + W, y + H))
+def _prepare_bg(size, background, bg_image, layout, blur, brightness):
+    if bg_image is None:
+        return make_background(background, size, layout)
+    with Image.open(bg_image) as source:
+        bg = ImageOps.fit(source.convert("RGB"), size, Image.Resampling.LANCZOS)
+    bg = bg.filter(ImageFilter.GaussianBlur(max(0.0, blur * size[0] / REF_W)))
+    return ImageEnhance.Brightness(bg).enhance(brightness)
 
 
-def _prepare_bg(size: tuple[int, int], background: str, bg_image=None, k: float = 1.0,
-                blur: float = 6.0, brightness: float = 0.62) -> Image.Image:
-    if bg_image is not None:
-        src = Image.open(bg_image).convert("RGB")
-        bg = _cover(src, size)
-        bg = bg.filter(ImageFilter.GaussianBlur(max(0.0, blur * k)))
-        bg = ImageEnhance.Brightness(bg).enhance(brightness)
-        return bg
-    return make_background(background, size)
+def _wrap(draw, text, font, width, max_lines):
+    remaining = " ".join(text.split())
+    lines = []
+    while remaining and len(lines) < max_lines:
+        count = 1
+        if draw.textlength(remaining, font=font) <= width:
+            lines.append(remaining)
+            break
+        suffix = "..." if len(lines) + 1 == max_lines else ""
+        while count < len(remaining) and draw.textlength(remaining[:count + 1] + suffix, font=font) <= width:
+            count += 1
+        split = remaining.rfind(" ", 0, count + 1)
+        if split > count * .6:
+            count = split
+        lines.append(remaining[:count].rstrip() + suffix)
+        remaining = remaining[count:].lstrip()
+    return lines
 
 
-def _text_w(d: ImageDraw.ImageDraw, text: str, font) -> float:
-    bbox = d.textbbox((0, 0), text, font=font)
-    return bbox[2] - bbox[0]
+def _course_lists(tt, week):
+    if week is None:
+        return tt.sorted_courses(), False
+    courses = []
+    unknown = False
+    for occ in resolve_timetable(tt, tt.weeks_total):
+        if occ.week not in {None, week}:
+            continue
+        unknown = unknown or occ.week is None
+        courses.append(Course(occ.name, occ.day, occ.start, occ.end, occ.room,
+                              "周次待确认" if occ.week is None else f"第 {week} 周"))
+    return sorted(courses, key=lambda course: (course.day, course.start, course.name)), unknown
 
 
-def _fit(d: ImageDraw.ImageDraw, text: str, max_w: float, hi: int, lo: int,
-         bold: bool = False) -> ImageFont.FreeTypeFont:
-    for size in range(max(hi, lo), lo - 1, -1):
-        f = load_font(size, bold)
-        if _text_w(d, text, f) <= max_w:
-            return f
-    return load_font(lo, bold)
+def _card_board(width, courses, rows, title, subtitle, palette, alpha, white, *, style, density=1.0):
+    phone = style == "phone"
+    scale = width / (760 if phone else 920) * density
+
+    def unit(value, minimum=1):
+        return max(minimum, round(value * scale))
+
+    pad, gutter = unit(21), unit(13)
+    title_font = load_font(unit(35, 12), True)
+    sub_font = load_font(unit(18, 9))
+    day_font = load_font(unit(24, 10), True)
+    course_font = load_font(unit(23 if phone else 18, 9), True)
+    meta_font = load_font(unit(17 if phone else 14, 8))
+    ink, muted = "#203449", "#435267"
+    probe = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    title_lines = _wrap(probe, title, title_font, width - 2 * pad, 2)
+    subtitle_lines = _wrap(probe, subtitle, sub_font, width - 2 * pad, 2)
+    header_height = (len(title_lines) * (title_font.size + unit(5))
+                     + len(subtitle_lines) * (sub_font.size + unit(4)) + unit(14)) if title else 0
+    day_courses = [[course for course in courses if course.day == day] for day in range(7)]
+    positions = []
+    y = pad + header_height
+    for row in rows:
+        sunday = phone and len(row) == 1
+        columns = 2 if sunday else len(row)
+        col = (width - 2 * pad - (columns - 1) * gutter) // columns
+        content_top = y + day_font.size + unit(8)
+        cursors = [content_top] * columns
+        for index, day in enumerate(row):
+            x = pad + index * (col + gutter)
+            positions.append(("day", DAYS[day], x, y, width - pad if sunday else x + col))
+            if not day_courses[day]:
+                positions.append(("empty", "无课", x, content_top, x + col))
+                cursors[index] += meta_font.size + unit(9)
+            for number, course in enumerate(day_courses[day]):
+                lane = number % 2 if sunday else index
+                x = pad + lane * (col + gutter)
+                meta = f"{course.start}-{course.end} 节" if course.start != course.end else f"{course.start} 节"
+                meta = " · ".join(filter(None, (meta, course.room, course.weeks)))
+                names = _wrap(probe, course.name, course_font, col - unit(23), 2)
+                details = _wrap(probe, meta, meta_font, col - unit(23), 2)
+                height = (len(names) * (course_font.size + unit(2))
+                          + len(details) * (meta_font.size + unit(2)) + unit(10))
+                positions.append(("course", course.name, x, cursors[lane], x + col, height, names, details))
+                cursors[lane] += height + unit(5)
+        y = max(cursors) + unit(8)
+    height = y + pad
+    board = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(board)
+    fill = (248, 247, 247, 172) if phone else (250, 248, 238, 236)
+    draw.rounded_rectangle((1, 1, width - 2, height - 2), radius=unit(23 if phone else 13),
+                           fill=fill, outline=(255, 255, 255, 215), width=unit(1))
+    if title:
+        y = pad
+        for lines, font, color in ((title_lines, title_font, ink), (subtitle_lines, sub_font, muted)):
+            for line in lines:
+                draw.text((pad, y), line, font=font, fill=color, anchor="lt")
+                y += font.size + unit(5)
+        draw.line((pad, y + unit(3), width - pad, y + unit(3)), fill="#afbfc9", width=1)
+    for kind, name, x, y, right, *details in positions:
+        if kind == "day":
+            draw.text((x, y), name, font=day_font, fill=ink, anchor="lt")
+            left = x + draw.textlength(name, font=day_font) + unit(10)
+            if left < right:
+                draw.line((left, y + day_font.size // 2, right, y + day_font.size // 2), fill="#a9b4bf", width=1)
+        elif kind == "empty":
+            draw.text((x, y + unit(2)), name, font=meta_font, fill=muted, anchor="lt")
+        else:
+            item_height, names, notes = details
+            color = palette[name]
+            tone = tuple(round(value * .15 + 255 * .85) for value in color)
+            if white:
+                tone = tuple(round(value * .40 + 18) for value in color)
+            draw.rounded_rectangle((x, y, right, y + item_height), radius=unit(8),
+                                   fill=(*tone, alpha), outline=(*color, max(75, alpha // 2)), width=1)
+            draw.rounded_rectangle((x + unit(3), y + unit(6), x + unit(5), y + item_height - unit(6)),
+                                   radius=unit(2), fill=(*color, 245))
+            line_y = y + unit(5)
+            for lines, font, foreground in ((names, course_font, "#ffffff" if white else ink),
+                                             (notes, meta_font, "#f1f5fb" if white else muted)):
+                for line in lines:
+                    draw.text((x + unit(10), line_y), line, font=font, fill=foreground, anchor="lt")
+                    line_y += font.size + unit(2)
+    return board
 
 
-def _fit_down(d: ImageDraw.ImageDraw, text: str, hi: int, lo: int, max_w: float,
-              bold: bool = False):
-    """先按指定字号尝试,放不下再往小缩.返回 (font, fits)."""
-    f = _fit(d, text, max_w, hi, lo, bold=bold)
-    return f, _text_w(d, text, f) <= max_w
+def _desktop_layout(bg, cards, title, subtitle, palette, alpha, white, top_safe, bottom_safe, wall):
+    width, height = bg.size
+    left, top = int(width * .025), int(height * max(.11, top_safe))
+    board_width = int(width * (.55 if wall else .62))
+    floor = max(20, int(height * (1 - max(.045, bottom_safe))) - top)
+    rows = ((0, 1, 2), (3, 4, 5, 6))
+    board = _card_board(board_width, cards, rows, title, subtitle, palette, alpha, white, style="desktop")
+    if board.height > floor:
+        board = _card_board(board_width, cards, rows, title, subtitle, palette, alpha, white,
+                            style="desktop", density=max(.55, floor / board.height))
+    if board.height > floor:
+        board = ImageOps.contain(board, (board.width, floor), Image.Resampling.LANCZOS)
+    if wall and board.height > 80:
+        bw, bh = board.size
+        # Small change in angle to align the panel with the classroom wall.
+        shift = max(2, round(bw * .012))
+        board = board.transform((bw + shift, bh + shift), Image.Transform.QUAD,
+                                (-shift, 0, 0, bh, bw, bh + shift, bw + shift, -shift),
+                                Image.Resampling.BICUBIC, fillcolor=(0, 0, 0, 0))
+    bg.alpha_composite(board, (left, top))
 
 
-def _layout_name(d: ImageDraw.ImageDraw, text: str, max_w: float,
-                 one_hi: int, one_lo: int, multi_hi: int, multi_lo: int,
-                 ell: int) -> tuple[list[str], ImageFont.FreeTypeFont]:
-    """课名排版:尽量一行 → 两行 → 省略号."""
-    f = _fit(d, text, max_w, one_hi, one_lo, bold=True)
-    if _text_w(d, text, f) <= max_w:
-        return [text], f
-    for size in range(multi_hi, multi_lo - 1, -1):
-        f2 = load_font(size, True)
-        mid = max(2, len(text) // 2)
-        for i in range(max(2, mid - 3), min(len(text) - 1, mid + 4)):
-            if _text_w(d, text[:i], f2) <= max_w and _text_w(d, text[i:], f2) <= max_w:
-                return [text[:i], text[i:]], f2
-    f3 = load_font(ell, True)
-    t = text
-    while len(t) > 1 and _text_w(d, t + "...", f3) > max_w:
-        t = t[:-1]
-    return [t + "..."], f3
+def _phone_layout(bg, cards, title, subtitle, palette, alpha, white, top_safe, bottom_safe):
+    width, height = bg.size
+    left, top = int(width * .05), int(height * max(.115, top_safe))
+    board_width = width - 2 * left
+    title_font = load_font(round(width * .05), True)
+    sub_font = load_font(round(width * .026))
+    draw = ImageDraw.Draw(bg)
+    title_lines = _wrap(draw, title, title_font, board_width, 2)
+    subtitle_lines = _wrap(draw, subtitle, sub_font, board_width, 2)
+    header_height = len(title_lines) * (title_font.size + 6) + len(subtitle_lines) * (sub_font.size + 5)
+    y = top
+    foreground = "#1c293b"
+    if bg.convert("L").crop((left, top, width - left, min(height, top + header_height))).resize((1, 1)).getpixel((0, 0)) < 105:
+        foreground = "#ffffff"
+    for lines, font in ((title_lines, title_font), (subtitle_lines, sub_font)):
+        for line in lines:
+            draw.text((width // 2, y), line, font=font, fill=foreground, anchor="mt")
+            y += font.size + 6
+    y += int(height * .012)
+    rows = ((0, 1), (2, 3), (4, 5), (6,))
+    room = max(24, int(height * (1 - max(.06, bottom_safe))) - y)
+    preferred = max(24, int(height * .65) - y)
+    board = _card_board(board_width, cards, rows, "", "", palette, alpha, white, style="phone")
+    if board.height > preferred:
+        board = _card_board(board_width, cards, rows, "", "", palette, alpha, white, style="phone",
+                            density=max(.72, preferred / board.height))
+    if board.height > room:
+        board = ImageOps.contain(board, (board.width, room), Image.Resampling.LANCZOS)
+    bg.alpha_composite(board, ((width - board.width) // 2, y))
 
 
 def render_wallpaper(tt: Timetable, size=(1920, 1080), background: str = "dusk",
                      bg_image=None, block_alpha: int = BLOCK_ALPHA,
-                     text_mode: str = "white", week: Optional[int] = None,
+                     text_mode: str = "auto", week: Optional[int] = None,
                      theme: str = "dark", blur: float = 6.0, brightness: float = 0.62,
-                     top_safe: float = 0.0, bottom_safe: float = 0.0) -> Image.Image:
-    """把一张课表渲染成图片(返回 PIL Image,不落盘).
-
-    block_alpha:课块不透明度(0~255),默认 190(预研 C 方案定稿值).
-    text_mode:white = 统一白字(默认,色块整体压深一点保对比);auto = 字色随背景亮度自适应.
-    """
-    W, H = size
-    if W < 640 or H < 480:
+                     top_safe: float = 0.0, bottom_safe: float = 0.0, layout=None) -> Image.Image:
+    """Render the actual course data as a desktop board or a phone card layout."""
+    width, height = size
+    if width < 640 or height < 480:
         raise ValueError("图片尺寸至少为 640x480.")
     if theme not in {"dark", "light", "paper"}:
         raise ValueError("主题应为 dark / light / paper.")
@@ -200,167 +305,32 @@ def render_wallpaper(tt: Timetable, size=(1920, 1080), background: str = "dusk",
         raise ValueError("周次超出学期范围.")
     if not 0 <= top_safe <= .3 or not 0 <= bottom_safe <= .3:
         raise ValueError("安全边距比例应在 0-0.3 之间.")
-    courses = tt.sorted_courses()
-    unknown = False
-    if week is not None:
-        courses = []
-        for occ in resolve_timetable(tt, tt.weeks_total):
-            if occ.week not in {None, week}:
-                continue
-            unknown = unknown or occ.week is None
-            courses.append(Course(occ.name, occ.day, occ.start, occ.end, occ.room,
-                                  "周次待确认" if occ.week is None else f"第 {week} 周"))
-        courses.sort(key=lambda c: (c.day, c.start, c.name))
-    k = W / REF_W
-
-    def s(v: float, lo: int) -> int:
-        """按宽度缩放一个数值,附带最小保底"""
-        return max(int(round(v * k)), lo)
-
-    margin = s(90, 24)
-    safe = int(H * top_safe)
-    top = s(150, 68) + safe
-    bottom = s(70, 40) + int(H * bottom_safe)
-    gutter = s(64, 30)
-
-    f_title = load_font(s(34, 24), True)
-    f_sub = load_font(s(20, 13))
-    f_day = load_font(s(24, 16), True)
-    f_row = load_font(s(18, 12))
-
-    bg = _prepare_bg(size, background, bg_image, k, blur, brightness)
-    light = theme in {"light", "paper"}
-    if light:
-        base = Image.new("RGB", (W, H), "#ffffff" if theme == "paper" else "#f1f5ff")
-        bg = base if theme == "paper" else Image.blend(bg, base, .88)
-    heading = (24, 35, 57, 255) if light else (255, 255, 255, 255)
-    secondary = (89, 105, 128, 255) if light else (255, 255, 255, 232)
-
-    ov = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    d = ImageDraw.Draw(ov)
-
-    # -- 顶部:标题 + 一行小字 --
-    today = datetime.now().strftime("%Y-%m-%d")
+    layout = layout or ("phone" if height > width else "desktop")
+    if layout not in {"desktop", "phone"}:
+        raise ValueError("请选择电脑或手机壁纸.")
+    cards, unknown = _course_lists(tt, week)
     view = f"第 {week} 周" if week is not None else "学期总览"
-    title = f"{tt.term} · {view}" if tt.term else f"我的课表 · {view}"
-    d.text((margin, safe + s(46, 22)), title, font=f_title, fill=heading)
-    suffix = " · 含周次待确认课程" if unknown else ""
-    d.text((margin, safe + s(98, 50)), f"共 {len(courses)} 条安排 · CourseFlow · {today}{suffix}",
-           font=f_sub, fill=secondary)
+    title = tt.term or "我的课表"
+    subtitle = view + (" · 含周次待确认课程" if unknown else "")
+    palette = {name: COLORS[index % len(COLORS)] for index, name in enumerate(dict.fromkeys(c.name for c in cards))}
+    alpha = max(0, min(255, int(block_alpha)))
+    white = text_mode == "white" and theme == "dark"
+    if theme == "paper":
+        bg = Image.new("RGBA", size, "white")
+    else:
+        bg = _prepare_bg(size, background, bg_image, layout, blur, brightness)
+        if theme == "light":
+            bg = Image.blend(bg, Image.new("RGB", size, "#f4f6ff"), .20)
+        bg = bg.convert("RGBA")
+    if layout == "phone":
+        _phone_layout(bg, cards, title, subtitle, palette, alpha, white, top_safe, bottom_safe)
+    else:
+        wall = normalize_background(background) == "sea" and bg_image is None and theme != "paper" and width / height > 1.55
+        _desktop_layout(bg, cards, title, subtitle, palette, alpha, white, top_safe, bottom_safe, wall)
+    return bg
 
-    # -- 表格区 --
-    grid_x0 = margin + gutter
-    grid_y0 = top + s(56, 26)
-    grid_x1 = W - margin
-    grid_y1 = H - bottom
-    col_w = (grid_x1 - grid_x0) / 7.0
-    row_h = (grid_y1 - grid_y0) / 12.0
-    if H >= W * 1.5:
-        # 竖屏(手机)版:限制行高--课块别又细又长,表格下方留点背景透气
-        row_h = min(row_h, col_w * 0.95)
-        grid_y1 = grid_y0 + row_h * 12.0
-    line_a = 55 if k >= 0.8 else 75  # 小尺寸(手机版)的网格线画明显一点
-
-    d.rounded_rectangle(
-        [margin - s(6, 3), top - s(6, 3), W - margin + s(16, 8), grid_y1 + s(16, 8)],
-        radius=s(18, 8), fill=(255, 255, 255, 160 if light else 30),
-    )
-    for i, day in enumerate(DAYS):
-        cx = grid_x0 + i * col_w + col_w / 2
-        bbox = d.textbbox((0, 0), day, font=f_day)
-        d.text((cx - (bbox[2] - bbox[0]) / 2, top + s(8, 4)), day,
-               font=f_day, fill=heading)
-    for r in range(12):
-        y = grid_y0 + r * row_h
-        bbox = d.textbbox((0, 0), str(r + 1), font=f_row)
-        d.text((margin + gutter / 2 - (bbox[2] - bbox[0]) / 2,
-                y + row_h / 2 - (bbox[3] + bbox[1]) / 2), str(r + 1),
-               font=f_row, fill=secondary)
-        d.line([(grid_x0, y), (grid_x1, y)], fill=(100, 120, 153, 70) if light else (255, 255, 255, line_a), width=1)
-    d.line([(grid_x0, grid_y1), (grid_x1, grid_y1)], fill=(100, 120, 153, 70) if light else (255, 255, 255, line_a), width=1)
-    for i in range(8):
-        x = grid_x0 + i * col_w
-        d.line([(x, grid_y0), (x, grid_y1)], fill=(100, 120, 153, 70) if light else (255, 255, 255, line_a), width=1)
-
-    # -- 课块 --(同名课用同一种颜色)
-    palette = COLORS
-    if light:
-        palette = [tuple(int(v * .25 + 255 * .75) for v in c) for c in COLORS]
-        text_mode = "auto"
-    if text_mode == "white":  # 统一白字时,把色块整体压深一点,保证对比
-        palette = [tuple(int(v * 0.80) for v in c) for c in COLORS]
-    color_of = {
-        name: palette[i % len(palette)]
-        for i, name in enumerate(dict.fromkeys(c.name for c in courses))
-    }
-    block_alpha = max(0, min(255, int(block_alpha)))
-    a = block_alpha / 255.0
-    center_text = H >= W * 1.5  # 竖屏(手机)版:块很高,文字垂直居中更好看
-
-    for course_index, c in enumerate(courses):
-        # 同格多课 → 左右分栏
-        same = [(index, other) for index, other in enumerate(courses)
-                if other.day == c.day and not (other.end < c.start or c.end < other.start)]
-        same_sorted = sorted(same, key=lambda item: (item[1].start, item[1].name, item[0]))
-        lane = next(index for index, item in enumerate(same_sorted) if item[0] == course_index)
-        n = len(same_sorted)
-
-        colx = grid_x0 + c.day * col_w
-        inner = col_w - s(6, 3)
-        lw = inner / n
-        x0 = colx + s(3, 2) + lane * lw + s(1.5, 1)
-        x1 = colx + s(3, 2) + (lane + 1) * lw - s(1.5, 1)
-        y0 = grid_y0 + (c.start - 1) * row_h + s(3, 2)
-        y1 = grid_y0 + c.end * row_h - s(3, 2)
-
-        tint = color_of[c.name]
-        d.rounded_rectangle([x0, y0, x1, y1], radius=s(10, 5), fill=tint + (block_alpha,))
-        d.rounded_rectangle([x0, y0, x1, y1], radius=s(10, 5), outline=(255, 255, 255, 100), width=1)
-
-        # 文字颜色自适应:把"课块叠在背景上"的颜色估出来,亮就深字,暗就白字
-        region = bg.crop((int(x0), int(y0), int(x1), int(y1)))
-        avg = ImageStat.Stat(region).mean
-        comp = [tint[i] * a + avg[i] * (1 - a) for i in range(3)]
-        lum = 0.299 * comp[0] + 0.587 * comp[1] + 0.114 * comp[2]
-        if text_mode == "white":
-            name_c, sub_c, wk_c = (255, 255, 255, 255), (255, 255, 255, 250), (248, 250, 255, 242)
-        elif lum > 135:
-            name_c, sub_c, wk_c = (30, 33, 42, 255), (48, 53, 70, 250), (52, 58, 76, 246)
-        else:
-            name_c, sub_c, wk_c = (255, 255, 255, 255), (255, 255, 255, 250), (248, 250, 255, 242)
-
-        maxw = (x1 - x0) - s(20, 10)
-        left = x0 + s(10, 5)
-        lines, nf = _layout_name(
-            d, c.name, maxw,
-            one_hi=s(20, 18), one_lo=s(13, 14),
-            multi_hi=s(15, 14), multi_lo=s(11, 12), ell=s(12, 12),
-        )
-        rows: list[tuple[str, ImageFont.FreeTypeFont, tuple]] = [
-            (ln, nf, name_c) for ln in lines
-        ]
-        sub = f"{c.room} · {c.weeks}" if (c.room and c.weeks) else (c.room or c.weeks)
-        if sub:
-            f_bs, fits = _fit_down(d, sub, s(15, 14), s(10, 12), maxw, bold=True)
-            if fits:
-                rows.append((sub, f_bs, sub_c))
-            else:
-                if c.room:
-                    rows.append((c.room, load_font(s(15, 13), True), sub_c))
-                if c.weeks:
-                    rows.append(("· " + c.weeks, load_font(s(13, 12), True), wk_c))
-
-        gap = s(3, 2)
-        total_h = sum(f.size for _, f, _ in rows) + gap * (len(rows) - 1)
-        if center_text:
-            ty = y0 + max(s(8, 4), (y1 - y0 - total_h) / 2)
-        else:
-            ty = y0 + s(8, 4)
-        for text, font, color in rows:
-            d.text((left, ty), text, font=font, fill=color)
-            ty += font.size + gap
-
-    return Image.alpha_composite(bg.convert("RGBA"), ov)
+def wallpaper_size(layout):
+    return PHONE_SIZE if layout == "phone" else desktop_size()
 
 
 def render_to_files(tt: Timetable, out_dir=None, which: str = "both",
@@ -372,16 +342,16 @@ def render_to_files(tt: Timetable, out_dir=None, which: str = "both",
     out.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d")
 
-    jobs: list[tuple[str, tuple[int, int]]] = []
+    jobs: list[tuple[str, str, tuple[int, int]]] = []
     if which in ("both", "desktop"):
-        jobs.append(("电脑", desktop_size()))
+        jobs.append(("desktop", "电脑", wallpaper_size("desktop")))
     if which in ("both", "phone"):
-        jobs.append(("手机", PHONE_SIZE))
+        jobs.append(("phone", "手机", wallpaper_size("phone")))
 
     results: list[tuple[Path, tuple[int, int]]] = []
-    for label, size in jobs:
+    for layout, label, size in jobs:
         img = render_wallpaper(tt, size=size, background=background, bg_image=bg_image,
-                               block_alpha=block_alpha, week=week, theme=theme, **options)
+                               block_alpha=block_alpha, week=week, theme=theme, layout=layout, **options)
         view = f"_第{week}周" if week is not None else ""
         path = out / f"课表壁纸_{label}{view}_{stamp}.png"
         img.convert("RGB").save(path)

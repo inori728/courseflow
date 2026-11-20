@@ -5,7 +5,7 @@
 - 调休上班日: 提醒用户确认按哪一天的课表执行;
 - 用户确认后再自己改 skip / changes.
 
-在线更新放假数据(term update-holidays)属于可选能力, 本轮先只使用内置数据.
+额外年份可从本地文件导入用户数据目录.
 """
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from typing import Optional
 from .model import Timetable
 from .schedule import resolve_course
 from .semester import SemesterCalendar, SemesterError
+from .settings import atomic_text, settings_dir
 
 _DATA_DIR = Path(__file__).with_name("data")
 _BUILTIN_TEMPLATE = "holidays-{year}.json"
@@ -121,11 +122,31 @@ def _parse_payload(payload, expected_year: int, source: str) -> HolidayData:
 
 
 def load_holidays(year: int) -> Optional[HolidayData]:
-    """读取内置放假数据; 没有对应年份时返回 None."""
-    path = _DATA_DIR / _BUILTIN_TEMPLATE.format(year=year)
-    if not path.exists():
-        return None
-    return _read_holiday_file(path, year)
+    """Prefer the profile's imported calendar, then use the bundled fallback."""
+    name = _BUILTIN_TEMPLATE.format(year=year)
+    for path in (settings_dir() / "holidays" / name, _DATA_DIR / name):
+        if path.is_file():
+            return _read_holiday_file(path, year)
+    return None
+
+
+def import_holiday_data(path, expected_year=None):
+    source = Path(path)
+    try:
+        payload = json.loads(source.read_text(encoding="utf-8-sig"))
+        year = int(payload["year"])
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise HolidayDataError(f"请提供含有效年份的本地放假 JSON 文件:{source}") from exc
+    if not 1 <= year <= 9999:
+        raise HolidayDataError("放假数据年份无效.")
+    data = _parse_payload(payload, expected_year if expected_year is not None else year, str(source))
+    if not data.days or len({item.date for item in data.days}) != len(data.days):
+        raise HolidayDataError("放假数据需要至少一天, 同一日期只能出现一次.")
+    target = settings_dir() / "holidays" / _BUILTIN_TEMPLATE.format(year=year)
+    clean = {"year": year, "days": [{"name": item.name, "date": item.date.isoformat(), "isOffDay": item.is_off}
+                                     for item in sorted(data.days, key=lambda item: item.date)]}
+    atomic_text(target, json.dumps(clean, ensure_ascii=False, indent=2) + "\n")
+    return target
 
 
 def _group_spans(days: list[HolidayDay]) -> list[HolidaySpan]:
@@ -170,7 +191,7 @@ def holiday_report(tt: Timetable, year: Optional[int] = None) -> HolidayReport:
             warnings.append(str(exc))
             continue
         if data is None:
-            warnings.append(f"没有 {y} 年的内置放假数据")
+            warnings.append(f"没有 {y} 年的放假数据. 可用 term holidays --import-data 导入已核对的本地 JSON.")
         else:
             days.extend(data.days)
 

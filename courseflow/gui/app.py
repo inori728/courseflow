@@ -13,6 +13,7 @@ import customtkinter as ctk
 from PIL import Image
 
 from .. import __version__, service
+from ..backgrounds import BACKGROUNDS, normalize as normalize_background
 from ..model import Timetable
 from ..settings import AI_REQUIRED
 from .ai_dialog import AISettingsDialog
@@ -531,7 +532,7 @@ class CourseFlowApp(ctk.CTk):
         self.export_fields = {}
         values = [
             ("week", "视图", ["学期总览"] + [f"第 {w} 周" for w in range(1, self.tt.weeks_total + 1)]),
-            ("background", "背景", ["黄昏晚霞", "深夜星河", "海盐渐变", "暮紫渐变"]),
+            ("background", "背景", list(BACKGROUNDS.values())),
             ("theme", "主题", ["经典深色", "清爽浅色", "打印白底"]),
             ("which", "壁纸尺寸", ["电脑和手机", "仅电脑", "仅手机"]),
         ]
@@ -555,13 +556,16 @@ class CourseFlowApp(ctk.CTk):
             label(controls, title, 12, MUTED).pack(anchor="w", padx=15, pady=(13, 4))
             ctk.CTkSlider(controls, from_=lower, to=upper, variable=variable).pack(fill="x", padx=15)
         self.set_wallpaper = tk.BooleanVar(value=False)
-        ctk.CTkCheckBox(controls, text="导出后设为电脑壁纸", variable=self.set_wallpaper, font=("Microsoft YaHei UI", 12)).pack(anchor="w", padx=15, pady=18)
+        ctk.CTkCheckBox(controls, text="导出后设为电脑壁纸", variable=self.set_wallpaper, font=("Microsoft YaHei UI", 12)).pack(anchor="w", padx=15, pady=(18, 4))
+        label(controls, "导出包含电脑版时, 可同时更换本机桌面背景.", 11, MUTED,
+              wraplength=235, justify="left").pack(anchor="w", padx=15, pady=(0, 14))
         preview = ctk.CTkFrame(outer, fg_color="white", corner_radius=14)
         preview.grid(row=0, column=1, sticky="nsew")
         preview.grid_columnconfigure(0, weight=1)
         preview.grid_rowconfigure(1, weight=1)
         label(preview, "壁纸预览", 18).grid(row=0, column=0, sticky="w", padx=20, pady=18)
-        self.preview_label = label(preview, "点击下方更新预览\n预览和导出均使用当前已校对的课表", 15, MUTED)
+        self.preview_label = label(preview, "点更新预览查看课表壁纸效果.\n选仅手机可以查看手机排版, 点导出壁纸保存图片.", 15, MUTED,
+                                   wraplength=450)
         self.preview_label.grid(row=1, column=0, sticky="nsew", padx=15)
         actions = ctk.CTkFrame(preview, fg_color="transparent")
         actions.grid(row=2, column=0, sticky="ew", padx=18, pady=18)
@@ -577,7 +581,7 @@ class CourseFlowApp(ctk.CTk):
         week_text = self.export_fields["week"].get()
         return {
             "week": None if week_text == "学期总览" else int(week_text.split()[1]),
-            "background": {"黄昏晚霞": "dusk", "深夜星河": "night", "海盐渐变": "sea", "暮紫渐变": "purple"}[self.export_fields["background"].get()],
+            "background": normalize_background(self.export_fields["background"].get()),
             "theme": {"经典深色": "dark", "清爽浅色": "light", "打印白底": "paper"}[self.export_fields["theme"].get()],
             "bg_image": self.custom_bg, "block_alpha": int(self.alpha.get()), "blur": self.blur.get(),
             "text_mode": "auto",
@@ -596,7 +600,8 @@ class CourseFlowApp(ctk.CTk):
     def update_preview(self):
         options = self.export_options()
         snapshot = copy.deepcopy(self.tt)
-        options["size"] = (1280, 800)
+        phone = self.export_fields["which"].get() == "仅手机"
+        options.update(size=(648, 1440) if phone else (1280, 720), layout="phone" if phone else "desktop")
         def complete(image):
             if self.page != "export":
                 return
