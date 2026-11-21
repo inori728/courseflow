@@ -24,6 +24,7 @@ from .agenda import agenda_text, local_today, week_number
 from .backgrounds import BACKGROUNDS, make_background
 from .group import (FreeWindow, apply_group_clocks, available_slot, group_clock_defaults, group_clock_options,
                     pick_grid_slot, require_free_slot, write_meeting)
+from .guide import usage_guide
 from .harness_commands import (SHORTCODE, _WEEK, adjust_intent, command_kind, course_search_key, formats_for, group_minimum,
                                next_course_name, wants_change, week_for)
 from .harness_controls import run_control
@@ -170,13 +171,20 @@ def _files(payload, scratch):
 
 
 class Harness:
-    def __init__(self):
+    def __init__(self, source=None):
+        self.source = Path(source).resolve() if source is not None else None
         self.root = settings_dir() / "harness"
         self.drafts = self.root / "drafts"
         self.exports = self.root / "exports"
         self.planning = HarnessPlanning(self)
 
     def run(self, action, payload):
+        if action == "guide":
+            return usage_guide()
+        if action in {"assistant", "assistant_choose"}:
+            from .assistant import Assistant
+            assistant = Assistant(self)
+            return assistant.send(payload) if action == "assistant" else assistant.choose(payload)
         handlers = {
             "status": self.status, "settings": self.settings, "save_settings": self.save_settings,
             "request": self.request, "agenda": self.agenda, "prepare": self.prepare,
@@ -196,6 +204,8 @@ class Harness:
         return handlers[action](payload)
 
     def source_path(self):
+        if self.source is not None:
+            return self.source
         bound = os.environ.get("COURSEFLOW_SOURCE")
         return Path(bound).resolve() if bound else service.default_gui_source().resolve()
 
@@ -293,10 +303,15 @@ class Harness:
     def settings(self, _payload):
         try:
             config = service.ai_settings()
-        except ValueError:
+        except (OSError, ValueError):
             config = AIConfig()
+        try:
+            config.validate()
+            ready = config.vision_verified
+        except ValueError:
+            ready = False
         return {"base_url": config.base_url, "model": config.model, "has_key": bool(config.api_key),
-                "timeout": config.timeout, "verified": config.vision_verified}
+                "timeout": config.timeout, "verified": ready}
 
     def save_settings(self, payload):
         try:
@@ -472,6 +487,9 @@ class Harness:
             raise ValueError("共用课表在预览后已更新, 请刷新并重新预览.")
         return path
 
+    def _confirmation(self, draft, tt, overwrite):
+        return self._draft({**draft, "type": "confirmed", "data": timetable_mapping(tt), "overwrite": overwrite})
+
     def _out(self):
         self.exports.mkdir(parents=True, exist_ok=True)
         target = self.exports / secrets.token_hex(16)
@@ -547,7 +565,10 @@ class Harness:
             "wallpaper_week": None,
             "wallpaper": wallpaper,
         }
-        if isinstance(payload.get("wallpaper_week"), int):
+        reference = payload.get("wallpaper_week_reference")
+        if isinstance(reference, str) and reference:
+            options["wallpaper_week"] = week_for(reference, tt)
+        elif isinstance(payload.get("wallpaper_week"), int):
             options["wallpaper_week"] = payload["wallpaper_week"]
         token = self._draft({
             "type": "change", "path": str(path), "signature": signature, "overwrite": overwrite,
@@ -659,9 +680,7 @@ class Harness:
             if background is not None:
                 # The confirmation has its own lifetime and reuses the selected image.
                 os.utime(background, None)
-            confirmed = self._draft({**draft, "type": "confirmed", "data": timetable_mapping(tt),
-                                     "overwrite": result["overwrite"]})
-            result["confirmation"] = confirmed
+            result["confirmation"] = self._confirmation(draft, tt, result["overwrite"])
         return result
 
     def wallpaper_background_preview(self, payload):
@@ -716,7 +735,7 @@ class Harness:
         tt = timetable_from_mapping(draft["data"])
         files = self._export(tt, draft)
         if path:
-            label = "调课" if draft["change"] else "导入课表"
+            label = draft.get("write_label") or ("调课" if draft["change"] else "导入课表")
             service.save_timetable(tt, path, expected_signature=draft["signature"],
                                    undo_path=self._undo_path(path), undo_label=label)
             service.remember_current_source(path)
@@ -891,7 +910,7 @@ class Harness:
         group = self._group_result(record, current, use_defaults=True)
         record.update(path=str(path), signature=signature)
         token = self._draft(record)
-        return self._group_view(token, group, record.get("clock_source", ""))
+        return {**self._group_view(token, group, record.get("clock_source", "")), "minutes": record["minutes"]}
 
     @staticmethod
     def _group_view(token, group, clock_source=""):

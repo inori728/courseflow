@@ -21,7 +21,7 @@ def _read(path):
     return items
 
 
-def _find(items, fields):
+def _matches(items, fields):
     token = fields.get("id")
     if token:
         matches = [item for item in items if item["id"] == token]
@@ -32,9 +32,18 @@ def _find(items, fields):
         matches = [item for item in items if item["title"].casefold() == needle]
         if not matches:
             matches = [item for item in items if needle in item["title"].casefold()]
+    return matches
+
+
+def _find(items, fields):
+    matches = _matches(items, fields)
     if len(matches) != 1:
         raise ValueError("找不到这条待办." if not matches else "有多条同名或相似待办, 请在侧栏选择.")
     return matches[0]
+
+
+def todo_matches(title):
+    return _matches(_read(settings_dir() / "todos.json"), {"title": title})
 
 
 def todo_list(fields):

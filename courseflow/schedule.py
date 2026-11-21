@@ -82,6 +82,11 @@ def resolve_timetable(tt: Timetable, total_weeks: int = DEFAULT_TOTAL_WEEKS) -> 
     return out
 
 
+def overlapping_occurrences(occurrences, week, day, start, end):
+    return [occ for occ in occurrences if occ.week in (None, week) and occ.day == day
+            and occ.start <= end and occ.end >= start]
+
+
 def resolve_blocks(course: Course, total_weeks: int = DEFAULT_TOTAL_WEEKS) -> list[ScheduleBlock]:
     """把同一时段的周次合并, 保留"周次无法确认"的块."""
     grouped: dict[tuple[int, int, int], set[int]] = {}

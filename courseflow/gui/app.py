@@ -1,4 +1,4 @@
-"""Three-step desktop workflow, with optional notification and group views."""
+"""Desktop timetable, assistant, and manual workbench."""
 from __future__ import annotations
 
 import copy
@@ -12,7 +12,7 @@ from tkinter import filedialog, messagebox, ttk
 import customtkinter as ctk
 from PIL import Image
 
-from .. import __version__, service
+from .. import service
 from ..backgrounds import BACKGROUNDS, normalize as normalize_background
 from ..model import Timetable
 from ..settings import AI_REQUIRED
@@ -58,22 +58,27 @@ class CourseFlowApp(ctk.CTk):
         self.notice_available = importlib.util.find_spec("courseflow.notice") is not None
         self.group_available = importlib.util.find_spec("courseflow.group") is not None
         self.poster_available = importlib.util.find_spec("courseflow.poster") is not None
-        self.grid_columnconfigure(1, weight=1)
-        self.grid_rowconfigure(0, weight=1)
-        self._sidebar()
+        self.assistant_view = None
+        self.todo_reservation = None
+        self.page = None
+        self.feature_parent = "common"
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
+        self._navigation()
         self.content = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
-        self.content.grid(row=0, column=1, sticky="nsew")
+        self.content.grid(row=1, column=0, sticky="nsew")
         self.content.grid_columnconfigure(0, weight=1)
         self.content.grid_rowconfigure(1, weight=1)
         self.header = ctk.CTkFrame(self.content, fg_color="white", corner_radius=0, height=105)
         self.header.grid(row=0, column=0, sticky="ew")
         self.header.grid_columnconfigure(0, weight=1)
-        self.page_title = label(self.header, "把课表变成每天看得见的东西", 25)
+        self.page_title = label(self.header, "课表", 25)
         self.page_title.grid(row=0, column=0, sticky="w", padx=30, pady=(22, 3))
         self.file_label = label(self.header, "", 12, MUTED)
         self.file_label.grid(row=1, column=0, sticky="w", padx=30, pady=(0, 18))
         buttons = ctk.CTkFrame(self.header, fg_color="transparent")
         buttons.grid(row=0, column=1, rowspan=2, padx=25)
+        self.return_button = Button(buttons, text="返回", width=62, fg_color=LIGHT, command=self.back)
         Button(buttons, text="打开课表", width=96, fg_color="#edf1fa", text_color=INK, command=self.open_source).pack(side="left", padx=5)
         Button(buttons, text="刷新课表", width=88, fg_color="#edf1fa", text_color=INK, command=self.refresh_source).pack(side="left", padx=5)
         Button(buttons, text="保存当前课表", width=110, fg_color=ACCENT, command=self.save).pack(side="left", padx=5)
@@ -90,7 +95,7 @@ class CourseFlowApp(ctk.CTk):
                 self.tt, self.saved_signature = service.load_timetable_snapshot(self.source)
             except ValueError as exc:
                 self.after(150, lambda text=str(exc): messagebox.showerror("课表未能打开", text, parent=self))
-        self.go("review" if self.tt.courses else "import")
+        self.go("review")
         self._refresh_file_label()
         self.after(80, self._poll)
         self.after(1000, self._watch_source)
@@ -98,57 +103,122 @@ class CourseFlowApp(ctk.CTk):
         self.bind("<Control-o>", lambda event: self.open_source())
         self.bind("<Control-z>", lambda event: self.undo())
 
-    def _sidebar(self):
-        sidebar = ctk.CTkFrame(self, width=220, corner_radius=0, fg_color="#18233d")
-        sidebar.grid(row=0, column=0, sticky="ns")
-        sidebar.grid_propagate(False)
-        sidebar.grid_columnconfigure(0, weight=1)
-        sidebar.grid_rowconfigure(9, weight=1)
-        logo = ctk.CTkFrame(sidebar, fg_color="transparent")
-        logo.grid(row=0, column=0, sticky="ew", padx=22, pady=(32, 22))
-        ctk.CTkLabel(logo, text="CF", width=45, height=45, corner_radius=12, fg_color=ACCENT,
-                     font=("Segoe UI", 20, "bold"), text_color="white").pack(side="left", padx=(0, 10))
-        ctk.CTkLabel(logo, text="CourseFlow", font=("Segoe UI", 20, "bold"), text_color="white").pack(side="left")
-        ctk.CTkLabel(sidebar, text="课表在手, 每天有序", font=("Microsoft YaHei UI", 12), text_color="#a3b1ce").grid(row=1, column=0, sticky="w", padx=25, pady=(0, 28))
+    def _navigation(self):
+        bar = ctk.CTkFrame(self, fg_color="white", corner_radius=0, border_width=1, border_color="#dce3ef")
+        bar.grid(row=0, column=0, sticky="ew")
+        label(bar, "CourseFlow", 21).pack(side="left", padx=(25, 30), pady=12)
         self.nav = {}
-        items = [("import", "01   导入课表"), ("review", "02   我的课表"), ("export", "03   生成与导出")]
-        if self.group_available:
-            items.append(("group", "组队 / 找共同空闲"))
-        for row, (key, text) in enumerate(items, 2):
-            button = Button(sidebar, text=text, anchor="w", height=43, corner_radius=10,
-                                   fg_color="transparent", hover_color="#293a5c", text_color="#c8d3e9",
-                                   font=("Microsoft YaHei UI", 14), command=lambda page=key: self.go(page))
-            button.grid(row=row, column=0, sticky="ew", padx=15, pady=5)
+        for key, text in (("review", "课表"), ("assistant", "助手"), ("common", "常用功能")):
+            button = Button(bar, text=text, width=96, height=35, fg_color="transparent", text_color=INK,
+                            command=lambda page=key: self.go(page))
+            button.pack(side="left", padx=3, pady=8)
             self.nav[key] = button
-        if self.notice_available:
-            Button(sidebar, text="调课 / 停课", anchor="w", height=42, fg_color="#283755", hover_color="#34496f",
-                         command=self.open_notice).grid(row=7, column=0, sticky="ew", padx=15, pady=(22, 5))
-        Button(sidebar, text="AI 接口设置", anchor="w", height=42, fg_color="transparent", hover_color="#293a5c",
-                     command=lambda: AISettingsDialog(self)).grid(row=8, column=0, sticky="ew", padx=15, pady=5)
-        ctk.CTkLabel(sidebar, text=f"v{__version__}\n本地课表 / 按需连接 AI", text_color="#8293b4", justify="left",
-                     font=("Microsoft YaHei UI", 11)).grid(row=10, column=0, sticky="w", padx=25, pady=24)
+        Button(bar, text="\u2699 设置", width=82, height=34, fg_color="transparent",
+               command=self.open_ai_settings).pack(side="right", padx=23, pady=8)
+
+    def open_ai_settings(self):
+        if self.page == "assistant":
+            self.assistant_view.open_settings()
+        else:
+            AISettingsDialog(self)
 
     def _refresh_file_label(self):
         state = "有修改待保存" if self.dirty else ("已打开" if self.source.exists() else "新课表尚未保存")
         self.file_label.configure(text=f"{self.source.name}  /  {len(self.tt.courses)} 条课程  /  {state}")
 
-    def go(self, page):
+    def go(self, page, *, parent=None):
+        if page != self.page or parent is not None:
+            self.feature_parent = parent or "common"
         self.page = page
+        selected = page if page in self.nav else "common"
         for key, button in self.nav.items():
-            button.configure(fg_color=ACCENT if key == page else "transparent", text_color="white" if key == page else "#c8d3e9")
+            button.configure(fg_color=LIGHT_ACTIVE if key == selected else "transparent", text_color=INK)
+        if page in self.nav:
+            self.return_button.pack_forget()
+        else:
+            self.return_button.pack(side="right", padx=5)
         for child in self.body.winfo_children():
-            child.destroy()
-        if page == "import":
+            if child is self.assistant_view:
+                child.pack_forget()
+            else:
+                child.destroy()
+        if page == "assistant":
+            self.header.grid_remove()
+            if self.assistant_view is None:
+                from .assistant_view import AssistantView
+                self.assistant_view = AssistantView(self.body, self)
+            self.assistant_view.pack(fill="both", expand=True)
+            self.assistant_view.activate()
+        else:
+            self.header.grid()
+        if page == "common":
+            self.show_common()
+        elif page == "import":
             self.show_import()
         elif page == "review":
             self.show_review()
         elif page == "export":
             self.show_export()
+        elif page == "adjust":
+            self.show_adjustment()
         elif page == "group":
             from .group_view import GroupView
             view = GroupView(self.body, self)
             view.pack(fill="both", expand=True)
+        elif page == "schedule":
+            self.show_schedule()
+        elif page == "todos":
+            from .todo_view import TodoView
+            self.page_title.configure(text="待办")
+            TodoView(self.body, self).pack(fill="both", expand=True, padx=28, pady=20)
         self._refresh_file_label()
+
+    def back(self):
+        if self.page == "group":
+            self.todo_reservation = None
+        self.go(self.feature_parent)
+
+    def show_common(self):
+        self.page_title.configure(text="常用功能")
+        area = ctk.CTkScrollableFrame(self.body, fg_color="white", border_width=1, border_color="#dce3ef")
+        area.pack(fill="both", expand=True, padx=28, pady=21)
+        for page, title, description in (
+            ("import", "导入课表", "截图\u3001表格或文件"),
+            ("adjust", "调课与停课", "调整时间\u3001节次或教室"),
+            ("group", "组队找空闲", "用成员课表或忙闲卡查空档"),
+            ("schedule", "小组日程", "安排议程和会前分工"),
+            ("todos", "待办", "记录任务和截止日期"),
+            ("export", "导出", "壁纸\u3001日历和挂图"),
+        ):
+            Button(area, text=f"{title} \u203a\n{description}", height=63, anchor="w",
+                   fg_color="transparent", text_color=INK,
+                   command=lambda target=page: self.go(target)).pack(fill="x", padx=10, pady=3)
+
+    def show_adjustment(self):
+        self.page_title.configure(text="调课与停课")
+        area = ctk.CTkFrame(self.body, fg_color="white")
+        area.pack(fill="x", padx=28, pady=20)
+        label(area, "选择具体课次并核对更改内容.", 15, MUTED).pack(anchor="w", padx=16, pady=12)
+        Button(area, text="识别调课通知", command=self.open_notice).pack(side="left", padx=16, pady=(0, 16))
+        Button(area, text="手动调整课次", fg_color=LIGHT, state="normal" if self.tt.courses else "disabled",
+               command=self.manual_notice).pack(side="left", pady=(0, 16))
+
+    def show_schedule(self):
+        self.page_title.configure(text="小组日程")
+        area = ctk.CTkFrame(self.body, fg_color="white")
+        area.pack(fill="x", padx=28, pady=20)
+        label(area, "先在组队里选好共同空档, 再填写议程和分工.", 15, MUTED).pack(anchor="w", padx=16, pady=13)
+        Button(area, text="打开组队", command=lambda: self.go("group", parent="schedule")).pack(side="left", padx=16, pady=(0, 16))
+        if self.assistant_view and self.assistant_view.context.get("schedule_token"):
+            Button(area, text="核对当前日程", fg_color=LIGHT,
+                   command=self.assistant_view.open_current_schedule).pack(side="left", pady=(0, 16))
+
+    def reserve_todo(self, item):
+        if not self.tt.courses:
+            messagebox.showinfo("先导入课表", "请先导入个人课表, 再为待办留出时间.", parent=self)
+            return
+        self.todo_reservation = item["id"]
+        self.go("group", parent=self.page)
 
     def set_timetable(self, tt, notes=None, remember=True):
         if remember:
@@ -165,6 +235,16 @@ class CourseFlowApp(ctk.CTk):
             self.dirty = True
             self.go(self.page)
             self.status.configure(text="已撤销上一次课表修改, 保存后写回文件.")
+        elif not self.dirty and self.saved_signature:
+            from ..harness import Harness
+            try:
+                workbench = Harness(self.source)
+                undo = workbench.status({"signature": self.saved_signature})["undo"]
+                if undo:
+                    workbench.undo({"token": undo["token"]})
+                    self.refresh_source(quiet=True)
+            except (ValueError, OSError) as exc:
+                messagebox.showerror("撤销未完成", str(exc), parent=self)
 
     def show_import(self):
         self.page_title.configure(text="从你手上的课表开始")

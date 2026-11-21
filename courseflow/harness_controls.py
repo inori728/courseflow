@@ -5,24 +5,10 @@ import json
 import re
 
 from .backgrounds import BACKGROUNDS, normalize
+from .guide import usage_guide
 from .harness_commands import _DAY, _NUM, _WEEK, formats_for, group_minimum, period_span, week_for
 from .model import parse_day
 from .weeks import _number
-
-
-HELP = "\n".join((
-    "CourseFlow 命令示例 (均在指令前加 /courseflow):",
-    "课表: 查第7周的课 / 上一周 / 周课表网格 / 下次数据结构在哪上 / 刷新课表",
-    "设置: 设置当前周次 7 / 确认周次 / 打开 AI 接口设置 / 自检 AI 接口",
-    "导入与调课: 导入课表 (附文件) / 预览 / 选课次 1 / 确认导入 / 确认调课 / 撤销上一步",
-    "导出: 导出手机壁纸 背景:海边教室 / 预览 / 确认导出 / 导出点格页",
-    "待办: 添加待办 周五前交实验报告 / 完成待办 交实验报告 / 给待办 交实验报告 留出时间",
-    "组队: 查第7周共同空闲 (附成员资料) / 确认组队 / 选空档 1 / 确认添加活动",
-    "连堂: 选空档 周三第3小节 优先连堂 / 选空档 周三第2大节",
-    "打开日程: 选空档 周三第2大节 并打开日程",
-    "调整默认作息: 选空档后可用 确认组队作息 我的课表 / 确认组队作息 预设, 或附节次时间的 JSON 对象",
-    "日程: 制定小组日程 / 查看日程 / 设置日程 事项:小组讨论 / 预览日程卡 / 导出日程卡",
-))
 
 
 def _view(name, message, *, refresh=False):
@@ -43,7 +29,9 @@ def run_control(app, payload, text):
     text = text.strip().rstrip(".\u3002")
     context = payload.get("workbench") or {}
     if text in {"帮助", "命令", "命令帮助"}:
-        return {"type": "command_help", "message": HELP}
+        return usage_guide()
+    if text in {"助手", "打开助手"}:
+        return _view("assistant", "已打开 CourseFlow 助手.")
     if text in {"课表", "查看课表", "刷新课表"}:
         return _view("agenda", "已刷新课表.", refresh=True)
     if text in {"组队", "打开组队"} and not payload.get("files"):

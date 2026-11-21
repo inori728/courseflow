@@ -255,7 +255,7 @@ def load_timetable_snapshot(path):
 
 
 def add_group_activity(tt, when: date, start: int, end: int, title: str, room: str = "", *, group=None):
-    from .schedule import resolve_timetable
+    from .schedule import overlapping_occurrences, resolve_timetable
     from .semester import SemesterCalendar
     calendar = SemesterCalendar.from_timetable(tt)
     week = (when - calendar.start).days // 7 + 1
@@ -276,9 +276,9 @@ def add_group_activity(tt, when: date, start: int, end: int, title: str, room: s
     title, room = title.strip(), room.strip()
     if not title or len(title) > 120 or len(room) > 120:
         raise ValueError("请填写 1-120 字的活动名称, 地点最长 120 字.")
-    for entry in resolve_timetable(tt, tt.weeks_total):
-        if entry.day == day and entry.week in (None, week) and entry.start <= end and entry.end >= start:
-            raise ValueError(f"活动与 '{entry.name}' 的安排重叠, 请重新选时间.")
+    conflicts = overlapping_occurrences(resolve_timetable(tt, tt.weeks_total), week, day, start, end)
+    if conflicts:
+        raise ValueError(f"活动与 '{conflicts[0].name}' 的安排重叠, 请重新选时间.")
     updated = copy.deepcopy(tt)
     updated.courses.append(Course(title, day, start, end, room, f"{week}周", kind="activity"))
     return updated, week

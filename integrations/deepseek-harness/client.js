@@ -4,7 +4,15 @@ window.__ModuleLoader__.load({
     const { createElement: h, useEffect, useRef, useState, useSyncExternalStore } = require('react')
     const plugin = 'dsh-courseflow'
     const tabKind = 'courseflow'
-    const sections = { agenda: '课表', import: '导入', adjust: '调课', group: '组队', schedule: '日程', todos: '待办', export: '导出' }
+    const sections = { agenda: '课表', assistant: '助手', common: '常用功能' }
+    const features = [
+      ['import', '导入课表', '截图、表格或文件'],
+      ['adjust', '调课与停课', '调整时间、节次或教室'],
+      ['group', '组队找空闲', '用成员课表或忙闲卡查空档'],
+      ['schedule', '小组日程', '安排议程和会前分工'],
+      ['todos', '待办', '记录任务和截止日期'],
+      ['export', '导出', '壁纸、日历和挂图'],
+    ]
     const days = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
     const formats = { desktop: '电脑壁纸', phone: '手机壁纸', yaml: '课表 YAML', ics: '日历 ICS', pdf: 'A4 PDF', png: '挂图 PNG' }
     const wallpaperPresets = { dusk: '樱花电车', night: '月夜海岸', sea: '海边教室', purple: '山间静湖' }
@@ -40,7 +48,35 @@ window.__ModuleLoader__.load({
       .cf-week-lesson span,.cf-week-lesson strong{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;overflow-wrap:anywhere}
       .cf-plan-row{display:grid;grid-template-columns:minmax(55px,1fr) minmax(110px,2fr) auto;gap:6px;align-items:center}.cf-plan-preview{display:block;max-width:100%;height:auto;border:1px solid var(--cf-line);border-radius:8px}
       .cf-task{padding:8px 0;border-bottom:1px solid var(--cf-line)}.cf-task label{overflow-wrap:anywhere}.cf-task-complete label{opacity:.7;text-decoration:line-through}.cf-option{border:1px solid var(--cf-line);border-radius:10px;padding:9px}.cf-option.cf-preferred{border-color:#6f9c86;background:#edf8f1;color:#27563d}
+      .cf-feature-list{border:1px solid var(--cf-line);border-radius:12px;overflow:hidden}
+      .cf-ui .cf-feature{display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%;padding:12px 14px;border:0;border-radius:0;text-align:left}
+      .cf-feature+.cf-feature{border-top:1px solid var(--cf-line)}.cf-ui .cf-feature:hover{background:#e9edff;color:#283d92}.cf-feature small{display:block;opacity:.75;margin-top:2px}
+      .cf-assistant{display:flex;flex-direction:column;flex:1;min-height:0;min-width:0}
+      .cf-assistant-head{padding:9px 12px;border-bottom:1px solid var(--cf-line)}
+      .cf-dialogue{flex:1;min-height:0;overflow:auto;scrollbar-gutter:stable;display:flex;flex-direction:column;gap:14px;padding:13px;overflow-wrap:anywhere}
+      .cf-message{max-width:96%;min-width:0;align-self:flex-start;display:grid;gap:6px}
+      .cf-message.cf-user{align-self:flex-end;background:#e9edff;color:#243174;border-radius:12px;padding:8px 10px}
+      .cf-message.cf-result{width:100%}.cf-message small{opacity:.75}
+      .cf-compose-area{padding:8px 12px 12px;border-top:1px solid var(--cf-line);display:grid;gap:8px}
+      .cf-compose-area textarea{resize:none;display:block;min-height:52px;max-height:126px}
+      .cf-ui .cf-mode[aria-pressed=true]{background:#e9edff;color:#283d92;border-color:#c5cdf6}
+      .cf-choice-list{display:grid;gap:5px}.cf-choice-list button{text-align:left}
+      .cf-guide-list{display:grid;gap:6px}.cf-guide-list code{overflow-wrap:anywhere}
+      .cf-guide-list details{border-bottom:1px solid var(--cf-line);padding:7px 0}
+      .cf-guide-how{display:grid;gap:12px;min-width:0}
+      .cf-guide-modes{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+      .cf-guide-note{display:grid;align-content:start;gap:3px;padding:9px 11px;border:1px solid var(--cf-line);border-radius:9px}
+      .cf-guide-setup{grid-column:1/-1;border-left:3px solid var(--cf-accent)}
+      .cf-guide-examples{border:1px solid var(--cf-line);border-radius:9px;overflow:hidden}
+      .cf-guide-example+.cf-guide-example{border-top:1px solid var(--cf-line)}
+      .cf-ui .cf-guide-example button{display:flex;justify-content:space-between;align-items:center;gap:10px;width:100%;border:0;border-radius:0;padding:8px 11px;text-align:left;font-weight:600}
+      .cf-ui .cf-guide-example button:hover,.cf-ui .cf-guide-example button[aria-expanded=true]{background:#e9edff;color:#283d92}
+      .cf-ui .cf-guide-example button:focus-visible{outline:2px solid var(--cf-accent);outline-offset:-2px}
+      .cf-guide-example button[aria-expanded=true] .cf-guide-chevron{transform:rotate(90deg)}
+      .cf-guide-example-body{display:grid;gap:5px;padding:8px 11px 10px}
+      .cf-guide-example-body blockquote{margin:0;padding:5px 9px;border-left:2px solid var(--cf-accent);white-space:pre-wrap}
       @container (max-width:520px){.cf-grid4{grid-template-columns:repeat(2,minmax(0,1fr))}}
+      @container (max-width:430px){.cf-guide-modes{grid-template-columns:1fr}}
       @container (max-width:350px){.cf-pane-body{padding:10px}.cf-grid3,.cf-compare{grid-template-columns:1fr}}
     `
 
@@ -215,19 +251,21 @@ window.__ModuleLoader__.load({
       )
     }
 
-    function Preview({ data, select, apply, back, busy }) {
+    function Preview({ data, select, apply, busy }) {
       const [selected, setSelected] = useState(data.selected || [])
       const [chosen, setChosen] = useState(false)
+      const operation = data.write_label || (data.overwrite ? (data.change ? '调课' : '导入') : '生成')
       return h('div', { className: 'cf-v' },
         data.candidates?.length > 1 && h('fieldset', { className: 'cf-v' },
           h('legend', null, `找到 ${data.candidates.length} 个候选课次`),
           ...data.candidates.map(item => h('div', { key: item.id }, check(`${item.label} ${item.clock}`, selected.includes(item.id),
             value => { setChosen(true); setSelected(value ? [...selected, item.id] : selected.filter(id => id !== item.id)) }))),
           button('查看所选课次的预览', () => { setChosen(false); select(selected) }, false, busy || !selected.length)),
-        data.rows.map((row, i) => h('div', { key: i, className: 'cf-compare' },
-          h('div', null, h('h3', null, '原安排'), row.before), h('div', null, h('h3', null, '新安排'), row.after))),
+        data.rows.map((row, i) => row.before ? h('div', { key: i, className: 'cf-compare' },
+          h('div', null, h('h3', null, '原安排'), row.before), h('div', null, h('h3', null, '新安排'), row.after))
+          : h('p', { key: i, className: 'cf-note' }, row.after)),
         data.conflicts?.length > 0 && note(data.conflicts.join(' / '), 'cf-error'),
-        data.confirmation && data.change && note('已检查时间冲突，等待你确认。', 'cf-ok'),
+        data.confirmation && (data.change || data.write_label) && note('已检查时间冲突，等待你确认。', 'cf-ok'),
         note(data.warnings?.length ? data.warnings.join(' / ') : ''),
         note(data.overwrite ? `确认后写回 ${data.source}，桌面端会刷新。` : ''),
         data.formats.length > 0 && h('p', { className: 'cf-muted' }, `生成 ${data.formats.map(value => formats[value]).join('、')}`),
@@ -236,8 +274,8 @@ window.__ModuleLoader__.load({
           Object.entries(data.wallpaper_previews).map(([format, image]) => h('figure', { key: format },
             h('img', { src: `data:image/jpeg;base64,${image}`, alt: `${formats[format]}预览`, decoding: 'async' }),
             h('figcaption', null, formats[format])))),
-        h('div', { className: 'cf-row' }, button('返回核对', back, false, busy),
-          data.confirmation && button(data.overwrite ? data.change ? '确认调课' : '确认导入' : '确认生成',
+        h('div', { className: 'cf-row' },
+          data.confirmation && button(`确认${operation}`,
             () => apply(data.confirmation), true, busy || chosen)),
       )
     }
@@ -384,7 +422,204 @@ window.__ModuleLoader__.load({
     const panelTitles = {
       prepare: '校对课表', preview: '操作预览', agenda: '课程查询', group_prepare: '核对组队资料',
       group_result: '共同空闲', activity: '添加个人课表活动', saved: '操作已完成', semester_week: '设置当前周次',
-      schedule: '小组日程安排', schedule_options: '候选时段', todos: '待办清单',
+      schedule: '小组日程安排', schedule_options: '候选时段', schedule_empty: '小组日程', todos: '待办清单',
+      command_help: '使用指引',
+    }
+
+    function AssistantGuide({ layout }) {
+      const [openExample, setOpenExample] = useState(null)
+      return h('div', { className: 'cf-guide-how' },
+        h('div', { className: 'cf-guide-modes' }, layout.notes.map(({ title, text }, index) =>
+          h('div', { key: title, className: index > 1 ? 'cf-guide-note cf-guide-setup' : 'cf-guide-note' },
+            h('strong', null, title), h('p', null, text)))),
+        h('div', null, h('h3', null, '参考例句'), h('p', { className: 'cf-muted' }, layout.hint)),
+        h('div', { className: 'cf-guide-examples' }, layout.examples.map(({ title, hint, text }) => {
+          const open = openExample === title
+          return h('div', { className: 'cf-guide-example', key: title },
+            h('button', { type: 'button', 'aria-expanded': open, onClick: () => setOpenExample(open ? null : title) },
+              title, h('span', { className: 'cf-guide-chevron', 'aria-hidden': true }, '\u203a')),
+            open && h('div', { className: 'cf-guide-example-body' },
+              hint && h('p', { className: 'cf-muted' }, hint), h('blockquote', null, text)))
+        })))
+    }
+
+    function GuideView({ data, initialSection = '命令' }) {
+      const [copyStatus, setCopyStatus] = useState('')
+      function copy(command) {
+        navigator.clipboard.writeText(command).then(() => setCopyStatus('已复制命令.'))
+          .catch(() => setCopyStatus('请选中文本后复制.'))
+      }
+      const blocks = body => body.split(/\n\n+/).map((block, index) => {
+        if (!block.startsWith('|')) {
+          return h('p', { className: 'cf-listline', key: index }, block.replace(/\*\*/g, '').replace(/\x60/g, ''))
+        }
+        const rows = block.split('\n').slice(2).map(row => row.trim().slice(1, -1).split('|').map(cell => cell.trim()))
+        return h('ul', { key: index, className: 'cf-day-list' }, rows.map(([label, example]) => {
+          const command = example.match(/\x60([^\x60]+)\x60/)?.[1] || example
+          return h('li', { key: label }, h('strong', null, label),
+            h('code', null, example.replace(/\x60/g, '')),
+            navigator.clipboard && button('复制', () => copy(command)))
+        }))
+      })
+      return h('div', { className: 'cf-guide-list' },
+        data.sections.map(section => h('details', { key: section.title, open: section.title === initialSection },
+          h('summary', null, section.title), section.layout ? h(AssistantGuide, { layout: section.layout }) :
+            h('div', { className: 'cf-v' }, blocks(section.body)))),
+        copyStatus && h('p', { role: 'status', className: 'cf-muted' }, copyStatus))
+    }
+
+    function AssistantPane({ ctx, active, busy, settingsVersion, onSettings, invoke, openResult, timetable, messages, setMessages }) {
+      const [guide, setGuide] = useState(null)
+      const [guideOpen, setGuideOpen] = useState(false)
+      const [verified, setVerified] = useState(null)
+      const [mode, setMode] = useState('chat')
+      const [draft, setDraft] = useState('')
+      const [files, setFiles] = useState([])
+      const [reading, setReading] = useState(false)
+      const [feedback, setFeedback] = useState(null)
+      const [review, setReview] = useState(null)
+      const scroll = useRef(null)
+      const input = useRef(null)
+      const chooser = useRef(null)
+      const sending = useRef(false)
+      useEffect(() => {
+        if (!active) return
+        let current = true
+        call(ctx, 'settings').then(response => {
+          if (current) setVerified(response.ok && Boolean(response.value.verified))
+        }).catch(() => { if (current) setVerified(false) })
+        if (!guide) call(ctx, 'guide').then(response => {
+          if (!current) return
+          if (response.ok) setGuide(response.value)
+          else setFeedback({ message: response.error })
+        }).catch(error => { if (current) setFeedback({ message: errorText(error) }) })
+        input.current?.focus({ preventScroll: true })
+        return () => { current = false }
+      }, [active, ctx, settingsVersion])
+      useEffect(() => {
+        if (active && scroll.current && (guideOpen || messages.length)) {
+          scroll.current.scrollTop = guideOpen ? 0 : scroll.current.scrollHeight
+        }
+      }, [active, messages, guideOpen])
+
+      function addFiles(event) {
+        const added = Array.from(event.target.files)
+        event.target.value = ''
+        const total = [...files, ...added]
+        if (total.length > 20 || total.reduce((size, file) => size + file.size, 0) > maxAttachmentBytes) {
+          setFeedback({ message: '每次最多添加 20 份附件, 总计不超过 12 MB.' })
+          return
+        }
+        setFiles(total)
+        setFeedback(null)
+      }
+
+      async function run(action, payload, outgoing) {
+        setFeedback(null)
+        const response = await invoke(action, { ...payload, mode })
+        if (!response) return false
+        if (!response.ok || response.value.retain) {
+          setFeedback({ message: response.error || response.value.message, setup: response.code === 'ai_settings' })
+          if (response.code === 'ai_settings') setVerified(false)
+          return false
+        }
+        setMessages(items => [...items, ...(outgoing ? [outgoing] : []),
+          { role: 'assistant', mode, ...response.value }].slice(-48))
+        setGuideOpen(false)
+        if (response.value.result?.type !== 'group_prepare') setReview(null)
+        if (outgoing) {
+          setDraft('')
+          if (!response.value.keep_files) setFiles([])
+        }
+        return true
+      }
+
+      async function send(event) {
+        event?.preventDefault()
+        const message = draft.trim()
+        if (busy || sending.current || !message) return
+        sending.current = true
+        setReading(true)
+        try {
+          const attachments = await Promise.all(files.map(readLocalFile))
+          const history = messages.filter(item => item.mode === mode).slice(-10)
+            .map(({ role, message }) => ({ role, message }))
+          await run('assistant', { text: message, files: attachments, history },
+            { role: 'user', message, mode, attachments: files.map(file => file.name) })
+        } catch (error) {
+          setFeedback({ message: errorText(error) })
+        } finally {
+          setReading(false)
+          sending.current = false
+        }
+      }
+
+      function useReply(reply, index) {
+        const result = reply.result
+        const locked = busy || reading || mode !== 'operate'
+        const pick = fields => run('assistant_choose', fields)
+        return h('div', { className: 'cf-v' },
+          reply.slots?.length > 0 && h('div', { className: 'cf-choice-list' }, reply.slots.map(slot =>
+            h('button', { key: slot.number, type: 'button', disabled: locked,
+              onClick: () => pick({ group_token: result.token, number: slot.number, goal: reply.goal }) },
+              `候选 ${slot.number} · ${slot.label} / 选这段`))),
+          reply.choices?.length > 0 && h('div', { className: 'cf-choice-list' }, reply.choices.map(choice =>
+            h('button', { key: choice.index, type: 'button', disabled: locked,
+              onClick: () => pick({ token: choice.token, index: choice.index }) }, choice.label))),
+          result?.type === 'group_prepare' && button(review === index ? '收起核对' : '核对成员资料',
+            () => setReview(review === index ? null : index), false, locked),
+          result?.type === 'group_prepare' && review === index && h(GroupReview, {
+            data: result, timetable, busy: locked,
+            submit: fields => pick({ review: fields, preferred_day: reply.preferred_day }),
+          }),
+          result && result.type !== 'group_prepare' && button({
+            prepare: '核对导入', preview: '查看预览', group_result: '查看忙闲图',
+            schedule: '核对并预览日程卡', activity: '核对选定时段', todos: '打开待办',
+            todo_reserve: '选空档', agenda: '查看课表', saved: result.updated ? '查看保存记录' : '查看导出结果',
+          }[result.type] || '查看结果', () => openResult(reply), false, locked))
+      }
+
+      return h('section', { className: 'cf-assistant', hidden: !active, 'aria-label': '课表助手' },
+        h('div', { className: 'cf-assistant-head cf-row cf-between' }, h('h2', null, '课表助手'),
+          button(guideOpen ? '收起指引' : '使用指引', () => setGuideOpen(!guideOpen))),
+        h('div', { className: 'cf-dialogue', ref: scroll, role: 'log', 'aria-live': 'polite' },
+          guideOpen && guide && h(GuideView, { data: guide, initialSection: '助手如何使用' }),
+          !guideOpen && !messages.length && h('div', { className: 'cf-v' },
+            verified === false && h('div', { className: 'cf-row' }, h('span', { className: 'cf-muted' }, 'AI 待配置'),
+              button('设置 AI 接口', onSettings, false, busy)),
+            h('p', null, '查课、导入截图、调课或安排小组日程.'),
+            h('p', { className: 'cf-muted' }, '要查课或改课表, 先切到课表操作.'),
+            guide && h('div', { className: 'cf-row cf-between cf-note' }, guide.sample,
+              button('填入示例', () => { setDraft(guide.sample); input.current?.focus() }, false, busy))),
+          !guideOpen && messages.map((item, index) => h('article', {
+            key: index, className: 'cf-message ' + (item.role === 'user' ? 'cf-user' : item.result ? 'cf-result' : ''),
+            'aria-label': item.role === 'user' ? '你' : 'CourseFlow',
+          }, item.attachments?.length > 0 && h('small', null, item.attachments.join(' / ')),
+          h('p', { className: 'cf-listline' }, item.message),
+          (item.result || item.choices) && useReply(item, index)))),
+        h('form', { className: 'cf-compose-area', onSubmit: send },
+          feedback && h('div', { className: feedback.setup ? 'cf-note cf-v' : 'cf-error', role: 'status' },
+            feedback.message, feedback.setup && button('设置 AI 接口', onSettings, false, busy),
+            feedback.setup && h('small', null, '已保留当前输入和附件.')),
+          files.length > 0 && h('div', { className: 'cf-row' }, files.map((file, index) =>
+            h('button', { type: 'button', key: index, disabled: busy || reading, title: '移除附件',
+              onClick: () => setFiles(items => items.filter((_, position) => position !== index)) }, file.name + ' ×'))),
+          h('textarea', { value: draft, ref: input, rows: 2, maxLength: 12000, placeholder: '说说你想做什么, 或问我怎么用',
+            'aria-label': '助手消息', onChange: event => setDraft(event.target.value), disabled: busy || reading,
+            onKeyDown: event => {
+              if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229) send(event)
+            } }),
+          h('div', { className: 'cf-row cf-between' },
+            h('div', { className: 'cf-row' },
+              h('input', { ref: chooser, type: 'file', multiple: true, hidden: true, onChange: addFiles,
+                accept: '.png,.jpg,.jpeg,.gif,.webp,.yaml,.yml,.csv,.xlsx,.docx,.pdf,.txt,.busycard' }),
+              button('附件', () => chooser.current?.click(), false, busy || reading),
+              ...[['chat', '聊天'], ['operate', '课表操作']].map(([value, title]) => h('button', {
+                type: 'button', key: value, className: 'cf-mode', 'aria-pressed': mode === value,
+                disabled: busy || reading, onClick: () => { setMode(value); setFeedback(null) },
+              }, title))),
+            h('button', { type: 'submit', className: 'cf-primary', disabled: busy || reading || !draft.trim() },
+              busy || reading ? '处理中...' : '发送'))))
     }
 
     function snapshot(initial) {
@@ -662,7 +897,7 @@ window.__ModuleLoader__.load({
           image?.error || (selection ? '正在加载背景预览…' : '选择背景图片后即可预览。')))
     }
 
-    function WorkbenchForm({ ctx, view, present, submit, onError, busy }) {
+    function WorkbenchForm({ ctx, view, present, submit, onError, busy, back }) {
       const [text, setText] = useState('')
       const [files, setFiles] = useState([])
       const [groupSources, setGroupSources] = useState([])
@@ -739,7 +974,9 @@ window.__ModuleLoader__.load({
         event.preventDefault()
         send(true)
       } },
-        h('h2', null, { import: '导入课表', adjust: '通知调课', group: '查找共同空闲', export: '导出课表' }[view]),
+        h('div', { className: 'cf-row cf-between' },
+          h('h2', null, { import: '导入课表', adjust: '通知调课', group: '查找共同空闲', export: '导出课表' }[view]),
+          button('返回', back, false, busy || reading)),
         !present && (adjustView || exportView) && note('请先打开或导入一份课表。'),
         importView && h('p', { className: 'cf-muted' }, '选择课表文件或截图，校对并确认后保存到我的课表。'),
         groupView && h('p', { className: 'cf-muted' }, '可以逐份选文件或添加 CF1 短码。成员资料加齐后点「下一步」一起查。'),
@@ -871,7 +1108,7 @@ window.__ModuleLoader__.load({
           return h('section', { className: 'cf-option cf-v' + (item.kind === 'preferred' ? ' cf-preferred' : ''), key: index },
             h('strong', null, `方案 ${label} · ${item.date} ${item.start}–${item.end}`), h('p', null, description),
             button(shorter ? `接受缩短并选方案 ${label}` : `选方案 ${label}`, () => choose(index, shorter), false, busy))
-        }), button('返回组队结果', back, false, busy))
+        }), button('返回', back, false, busy))
     }
 
     function ScheduleEditor({ data, submit, back, ctx, onError, busy }) {
@@ -883,7 +1120,7 @@ window.__ModuleLoader__.load({
         h('p', null, `你的要求 · ${data.review.request}`), note(data.review.summary),
         h('div', { className: 'cf-compare' }, h('div', { className: 'cf-v' }, h('h3', null, '修改前'), h(PlanSummary, { draft: data.draft })),
           h('div', { className: 'cf-v' }, h('h3', null, '修改后 (可编辑)'), h(ScheduleFields, { draft, change: setDraft }))),
-        h('div', { className: 'cf-row' }, button('取消修改', () => go('discard'), false, busy),
+        h('div', { className: 'cf-row' }, button('返回', () => go('discard'), false, busy),
           button('应用修改', () => go('apply', { draft: schedulePayload(draft) }), true, busy)))
       return h('div', { className: 'cf-v' }, note(data.selection_note), note(data.message, 'cf-ok'),
         h(FileList, { files: data.files, ctx, onError }),
@@ -903,10 +1140,10 @@ window.__ModuleLoader__.load({
           setStyle(value)
           if (data.preview) go('preview', { style: value })
         } }, ...Object.entries(scheduleStyles).map(([key, value]) => h('option', { key, value: key }, value)))),
-        h('div', { className: 'cf-row' }, button('返回组队结果', back, false, busy),
+        h('div', { className: 'cf-row' },
+          button('返回', back, false, busy),
           data.has_undo && button('撤销更改', () => go('undo'), false, busy),
-          data.preview ? button('继续编辑', () => go('current'), false, busy) :
-            button('保存草稿', () => go('save', { draft: schedulePayload(draft) }), false, busy),
+          !data.preview && button('保存草稿', () => go('save', { draft: schedulePayload(draft) }), false, busy),
           data.preview ? button('确认并导出 PNG', () => go('export', { style }), true, busy) :
             button('预览日程卡', () => go('preview', { style, draft: schedulePayload(draft) }), true, busy || !draft.title.trim())))
     }
@@ -917,6 +1154,7 @@ window.__ModuleLoader__.load({
       const [view, setView] = useState('agenda')
       const [work, setWork] = useState(null)
       const [groupWork, setGroupWork] = useState(null)
+      const [groupReview, setGroupReview] = useState(null)
       const [scheduleWork, setScheduleWork] = useState(null)
       const [settingsOpen, setSettingsOpen] = useState(false)
       const [busy, setBusy] = useState(false)
@@ -926,11 +1164,16 @@ window.__ModuleLoader__.load({
       const [task, setTask] = useState(null)
       const [preferPair, setPreferPair] = useState(true)
       const [groupTarget, setGroupTarget] = useState('schedule')
+      const [settingsVersion, setSettingsVersion] = useState(0)
+      const [assistantMessages, setAssistantMessages] = useState([])
       const preparation = useRef(null)
       const edits = useRef(null)
+      const previewFromReview = useRef(false)
       const group = useRef(null)
       const seen = useRef(null)
       const busyRef = useRef(false)
+      const openedByAssistant = useRef(null)
+      const groupFromSchedule = useRef(false)
 
       function receive(response, resume) {
         if (!response.ok) {
@@ -943,6 +1186,13 @@ window.__ModuleLoader__.load({
         }
         const next = response.value
         if (!next) return
+        const origin = openedByAssistant.current
+        if (resume?.action === 'commit' && next.type === 'saved' && origin) {
+          const details = (work?.rows || []).map(row => row.after).filter(Boolean)
+          const message = [next.message, ...details].join('\n')
+          setAssistantMessages(items => items.map(item => item === origin
+            ? { ...item, message, result: next, preparation: undefined } : item))
+        }
         setError('')
         setSettingsOpen(next.type === 'settings')
         if (next.type === 'settings') {
@@ -952,6 +1202,7 @@ window.__ModuleLoader__.load({
         if (next.type === 'prepare') {
           preparation.current = next
           edits.current = null
+          previewFromReview.current = false
           setView(next.change ? 'adjust' : next.imported ? 'import' : 'export')
         }
         if (next.type === 'open_view') {
@@ -960,6 +1211,7 @@ window.__ModuleLoader__.load({
           if (next.refresh) board.refresh()
           return
         }
+        if (next.type === 'command_help') setView('common')
         if (next.type === 'agenda') {
           setView('agenda')
           if (next.view_mode) setWeekMode(next.view_mode)
@@ -970,6 +1222,7 @@ window.__ModuleLoader__.load({
           setTask(next.item)
           setView('group')
           setWork(null)
+          setGroupReview(null)
           if (group.current?.token === next.group_token) setGroupWork(group.current)
           else if (next.group_token) {
             return call(ctx, 'group_refresh', { token: next.group_token }, session)
@@ -978,13 +1231,18 @@ window.__ModuleLoader__.load({
           return
         }
         if (['schedule', 'schedule_options', 'schedule_empty'].includes(next.type)) {
+          if (next.type === 'schedule') groupFromSchedule.current = false
           if (next.activity_token && group.current?.token === next.group_token) setGroupWork(group.current)
           setWork(null)
           setView('schedule')
           setScheduleWork(next)
         } else if (['group_prepare', 'group_result', 'activity'].includes(next.type) ||
             next.type === 'saved' && (next.group_token || next.return_group)) {
-          if (next.type === 'group_result') group.current = next
+          if (next.type === 'group_prepare') setGroupReview(next)
+          if (next.type === 'group_result') {
+            group.current = next
+            if (!['group_search', 'group_refresh'].includes(resume?.action)) setGroupReview(null)
+          }
           if (next.type === 'activity') {
             setTask(next.task)
           }
@@ -999,6 +1257,7 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         if (!job || busy || seen.current === job.id) return
         seen.current = job.id
+        openedByAssistant.current = null
         setPaused(null)
         setWork(null)
         receive(job, { action: 'resume', payload: { job: job.id } })
@@ -1006,11 +1265,23 @@ window.__ModuleLoader__.load({
 
       async function submit(action, payload) {
         if (busyRef.current) return
+        const inAssistant = action === 'assistant' || action === 'assistant_choose'
         busyRef.current = true
         setBusy(true)
         setError('')
         try {
           const response = await call(ctx, action, payload, session)
+          if (inAssistant) {
+            const result = response.value?.result
+            if (result?.type === 'group_result') {
+              group.current = result
+              setGroupWork(result)
+              setGroupReview(null)
+              setTask(null)
+            }
+            if (result?.type === 'schedule') setScheduleWork(result)
+            return response
+          }
           if (action === 'undo') {
             const current = board.schedule.getSnapshot()
             if (current?.undo?.token === payload.token) board.schedule.set({ ...current, undo: null })
@@ -1019,6 +1290,7 @@ window.__ModuleLoader__.load({
           await receive(response, { action, payload })
           return response.ok
         } catch (error) {
+          if (inAssistant) return { ok: false, error: errorText(error) }
           setError(errorText(error))
           return false
         } finally {
@@ -1028,6 +1300,7 @@ window.__ModuleLoader__.load({
       }
 
       function doPreview(fields, selected) {
+        if (work?.type === 'prepare') previewFromReview.current = true
         edits.current = { ...fields }
         submit('preview', { token: preparation.current.token, ...fields, selected })
       }
@@ -1040,6 +1313,8 @@ window.__ModuleLoader__.load({
         submit(action, payload)
       }
       function navigate(next) {
+        openedByAssistant.current = null
+        if (next === 'group') groupFromSchedule.current = false
         setView(next)
         setWork(null)
         setSettingsOpen(false)
@@ -1047,6 +1322,15 @@ window.__ModuleLoader__.load({
         setError('')
         if (next === 'todos') submit('todos', {})
         if (next === 'schedule' && !scheduleWork) submit('schedule', { operation: 'current' })
+      }
+      function openAssistantResult(reply) {
+        openedByAssistant.current = reply
+        previewFromReview.current = false
+        const value = reply.result
+        preparation.current = reply.preparation || null
+        edits.current = null
+        if (value.type === 'preview' && !value.write_label) setView(value.change ? 'adjust' : value.overwrite ? 'import' : 'export')
+        receive({ ok: true, value })
       }
       function settings() {
         if (settingsOpen) setPaused(null)
@@ -1075,6 +1359,26 @@ window.__ModuleLoader__.load({
         else navigate('group')
       }
 
+      function backFromPanel() {
+        if (work.type === 'preview' && preparation.current?.token === work.token && previewFromReview.current) {
+          setWork(preparation.current)
+        } else {
+          navigate(openedByAssistant.current ? 'assistant' : view === 'todos' ? 'common' : view)
+        }
+      }
+
+      function backFromGroupForm() {
+        const parent = openedByAssistant.current ? 'assistant' : task ? 'todos' : groupFromSchedule.current ? 'schedule' : 'common'
+        setTask(null)
+        navigate(parent)
+      }
+
+      function backFromSchedule(data) {
+        if (data.preview) setScheduleWork({ ...data, preview: null })
+        else if (openedByAssistant.current) navigate('assistant')
+        else backToGroup(data.group_token)
+      }
+
       function renderPanel(work) {
         if (!work) return null
         switch (work.type) {
@@ -1082,17 +1386,14 @@ window.__ModuleLoader__.load({
             submit: week => submit('save_semester_week', { token: work.token, week }) })
           case 'agenda': return work.days ? h(WeekAgenda, { data: work, today: state?.date, mode: weekMode, setMode: setWeekMode }) :
             h('pre', { className: 'cf-listline' }, work.message || entry(work.upcoming) || '暂无已确认的下一节课。')
-          case 'command_help': return h('pre', { className: 'cf-listline' }, work.message)
+          case 'command_help': return h(GuideView, { data: work })
           case 'background_preview': return h('figure', { className: 'cf-background-preview' },
             h('img', { src: `data:image/png;base64,${work.base64}`, alt: work.message }), note(work.message))
           case 'prepare': return h(Preparation, { key: work.token, data: { ...work,
             table: edits.current ? { ...work.table, ...edits.current } : work.table },
             submit: fields => doPreview(fields), busy })
           case 'preview': return h(Preview, { key: work.confirmation || work.token, data: work,
-            back: () => setWork(preparation.current),
             select: selected => doPreview(edits.current, selected), apply: token => submit('commit', { token }), busy })
-          case 'group_prepare': return h(GroupReview, { key: work.token, data: work, timetable: state, busy,
-            submit: data => submit('group_search', data) })
           case 'activity': {
             const back = () => backToGroup(work.group_token)
             if (work.open_schedule) return h(ActivityClocks, { key: work.token, slot: work, busy, back,
@@ -1105,11 +1406,15 @@ window.__ModuleLoader__.load({
           }
           case 'todos': return h(TodoList, { data: work, submit: fields => submit('todos', fields), reserve, busy })
           case 'schedule_empty': return h('div', { className: 'cf-v' },
-            note('从组队结果选一段空档, 或在聊天中用 /courseflow 约事.'), button('打开组队', () => navigate('group'), false, busy))
+            note('从组队结果选一段空档, 或在聊天中用 /courseflow 约事.'), button('打开组队', () => {
+              navigate('group')
+              groupFromSchedule.current = true
+            }, false, busy))
           case 'schedule_options': return h(ScheduleOptions, { data: work, busy, back: () => backToGroup(work.group_token),
             choose: (index, shorter) => submit('schedule', { operation: 'choose', token: work.token, index, confirm_shorter: shorter }) })
           case 'schedule': return h(ScheduleEditor, { key: work.token, data: work, ctx, busy, onError: setError,
-            back: () => backToGroup(work.group_token), submit: fields => submit('schedule', fields) })
+            back: () => backFromSchedule(work),
+            submit: fields => submit('schedule', fields) })
           case 'saved': return h('div', { className: 'cf-v' },
             note(work.message, 'cf-ok'), h(FileList, { files: work.files, ctx, onError: setError }),
             (work.group_token || work.return_group) && button('返回忙闲图', () => {
@@ -1121,7 +1426,7 @@ window.__ModuleLoader__.load({
       }
 
       function heading(work, back) {
-        const title = panelTitles[work?.type]
+        const title = work?.write_label ? `${work.write_label}预览` : panelTitles[work?.type]
         if (!title) return null
         const weekly = work.type === 'agenda' && work.days
         return h('div', { className: 'cf-row cf-between' },
@@ -1129,13 +1434,20 @@ window.__ModuleLoader__.load({
             weekly && h('div', { className: 'cf-row', role: 'group', 'aria-label': '切换周次' },
               button('上一周', () => lookupWeek(work.week - 1), false, busy || work.week <= 1),
               button('下一周', () => lookupWeek(work.week + 1), false, busy || work.week >= work.weeks_total))),
-          back && button(work.type === 'group_result' ? '重新查询' : '返回', back, false, busy))
+          back && button('返回', back, false, busy))
       }
 
       const showGroup = view === 'group' && !settingsOpen && !work
       const showSchedule = view === 'schedule' && !settingsOpen && !work
+      const showAssistant = view === 'assistant' && !settingsOpen && !work
+      const showWorkbench = !showAssistant && !showGroup && !showSchedule && !settingsOpen
+      const selectedSection = view === 'agenda' || view === 'assistant' ? view : 'common'
       const groupResult = group.current
-      const groupBack = ['group_prepare', 'group_result'].includes(groupWork?.type) ? () => setGroupWork(null) : null
+      const groupBack = groupWork?.type === 'group_result' ? () => {
+        if (!groupReview && (openedByAssistant.current || task)) backFromGroupForm()
+        else setGroupWork(groupReview)
+      } : groupWork?.type === 'group_prepare' ? () => setGroupWork(null) : null
+      const backToCommon = () => navigate('common')
       const panel = renderPanel(work)
       const notices = [
         error ? h('p', { key: 'error', role: 'alert', className: 'cf-error' }, error) : null,
@@ -1146,7 +1458,7 @@ window.__ModuleLoader__.load({
       return h('section', { className: 'cf-ui cf-pane', 'aria-label': 'CourseFlow 课表' },
         h('header', { className: 'cf-pane-header' },
           h('nav', { className: 'cf-nav', 'aria-label': 'CourseFlow 功能' }, Object.entries(sections).map(([id, title]) => h('button', {
-            key: id, type: 'button', 'aria-current': view === id && !settingsOpen ? 'page' : undefined,
+            key: id, type: 'button', 'aria-current': selectedSection === id && !settingsOpen ? 'page' : undefined,
             disabled: busy, onClick: () => navigate(id),
           }, title))),
           h('div', { className: 'cf-row' },
@@ -1154,11 +1466,17 @@ window.__ModuleLoader__.load({
               title: state?.undo ? `撤销上一次${state.undo.label}` : '当前没有可撤销的课表改动' }, '撤销上一步'),
             h('button', { type: 'button', className: 'cf-icon', title: 'AI 接口设置', 'aria-label': 'AI 接口设置',
               'aria-pressed': settingsOpen, disabled: busy, onClick: settings }, h(GearIcon)))),
+        h(AssistantPane, { ctx, active: showAssistant, busy, settingsVersion, timetable: state, invoke: submit,
+          messages: assistantMessages, setMessages: setAssistantMessages,
+          onSettings: () => { setPaused(null); setSettingsOpen(true) }, openResult: openAssistantResult }),
         h('div', { className: 'cf-pane-body cf-v', hidden: !showGroup },
           showGroup && notices,
           task && note(`为 ${task.title} 留时间. 请选择共同空档并确认写入课表.`),
           heading(groupWork, groupBack),
           renderPanel(groupWork),
+          h('div', { hidden: groupWork?.type !== 'group_prepare' }, groupReview && h(GroupReview, {
+            key: groupReview.token, data: groupReview, timetable: state, busy, submit: data => submit('group_search', data),
+          })),
           h('div', { hidden: groupWork?.type !== 'group_result' }, groupResult && h(Heatmap, {
             key: groupResult.token, data: groupResult, preferPair, setPreferPair, busy, task,
             target: groupTarget, setTarget: setGroupTarget,
@@ -1166,20 +1484,32 @@ window.__ModuleLoader__.load({
             select: fields => submit('activity_preview', { group_token: groupResult.token, todo_id: task?.id || null,
               open_schedule: !task && groupTarget !== 'personal', edit_clocks: !task && groupTarget === 'clocks', ...fields }),
           })),
-          h('div', { hidden: Boolean(groupWork) }, h(WorkbenchForm, { ...formProps, view: 'group' }))),
+          h('div', { hidden: Boolean(groupWork) }, h(WorkbenchForm, { ...formProps, view: 'group', back: backFromGroupForm }))),
         h('div', { className: 'cf-pane-body cf-v', hidden: !showSchedule },
-          showSchedule && notices, heading(scheduleWork), renderPanel(scheduleWork),
-          !scheduleWork && button('打开当前日程', () => submit('schedule', { operation: 'current' }), false, busy)),
+          showSchedule && notices,
+          heading(scheduleWork, scheduleWork?.type === 'schedule_empty' ? backToCommon : null), renderPanel(scheduleWork),
+          !scheduleWork && h('div', { className: 'cf-row' }, button('返回', backToCommon, false, busy),
+            button('打开当前日程', () => submit('schedule', { operation: 'current' }), false, busy))),
         settingsOpen && h('div', { className: 'cf-pane-body cf-v' }, notices,
-          h(Settings, { ctx, onResume: paused ? resume : undefined, onSaved: () => setError('') })),
-        !showGroup && !showSchedule && !settingsOpen && h('div', { className: 'cf-pane-body cf-v' },
-          notices, heading(work, work?.type === 'todos' ? null : () => navigate(view)), panel,
+          h('div', { className: 'cf-row' }, button('返回', settings, false, busy)),
+          h(Settings, { ctx, onResume: paused ? resume : undefined, onSaved: () => {
+            setError('')
+            setSettingsVersion(version => version + 1)
+          } })),
+        h('div', { className: 'cf-pane-body cf-v', hidden: !showWorkbench },
+          showWorkbench && notices, heading(work, backFromPanel), panel,
+          view === 'common' && !panel && h('div', { className: 'cf-v' }, h('h2', null, '常用功能'),
+            h('div', { className: 'cf-feature-list' }, features.map(([id, title, description]) =>
+              h('button', { key: id, type: 'button', className: 'cf-feature', disabled: busy, onClick: () => navigate(id) },
+                h('span', null, h('strong', null, title), h('small', null, description)),
+                h('span', { 'aria-hidden': true }, '\u203a'))))),
           view === 'agenda' && !panel && h(AgendaOverview, { state, refresh: board.refresh, busy, lookup: lookupWeek,
             namedLookup: name => submit('request', { mode: 'agenda', text: `下次${name}在哪上` }),
             openSemesterWeek: () => submit('semester_week', {}) }),
-          view === 'todos' && !panel && button('刷新待办', () => submit('todos', {}), false, busy),
-          ['import', 'adjust', 'export'].includes(view) && (!panel || view === 'export') && h('div', { hidden: Boolean(panel) },
-            h(WorkbenchForm, { key: view, ...formProps, view }))))
+          view === 'todos' && !panel && h('div', { className: 'cf-row' }, button('返回', backToCommon, false, busy),
+            button('刷新待办', () => submit('todos', {}), false, busy)),
+          ['import', 'adjust', 'export'].map(id => h('div', { key: id, hidden: view !== id || Boolean(panel) },
+            h(WorkbenchForm, { ...formProps, view: id, back: backToCommon })))))
     }
 
     function apply(ctx) {

@@ -12,7 +12,7 @@ python scripts/check_source.py
 python -m courseflow --help
 ```
 
-自动化测试不需要 API Key 或联网。Node 可选，仅用于点格页与 Python 忙闲卡协议互通测试。PDF 可选依赖未装时会跳过 PDF 结构检查，正常测试结果中会明确显示。
+自动化测试使用模拟模型响应，覆盖助手模式、预览确认、连续组队与日程及共用待办。Node 可用于点格页与 Python 忙闲卡协议互通测试，以及 `node --check` 检查 Harness 的 `client.js` 和 `host.js`。PDF 可选依赖未装时会跳过 PDF 结构检查，正常测试结果中会明确显示。
 
 ## 改动约定
 
@@ -33,9 +33,10 @@ GitHub 与 Gitee 以本地仓库为唯一内容源；批准后由维护者正常
 ```powershell
 .\scripts\bootstrap.ps1 -AnacondaPython "<Anaconda安装目录>\python.exe" -Build
 .\.dev\venv\Scripts\python.exe scripts\build_release.py
+.\.dev\venv\Scripts\python.exe scripts\build_release.py --harness-plugin
 ```
 
-构建使用项目 `.dev` 保存缓存和临时文件，输出在 `dist`。它不提交、不打 tag、不上传。构建目录应位于目标工作盘，尽量使用 D 盘；如果软件必须写 C 盘或从 D 盘还需指回 C 盘，则直接使用 C 盘。
+两条构建命令分别生成桌面版和独立插件包。构建使用项目 `.dev` 保存缓存和临时文件，输出在 `dist`。它不提交、不打 tag、不上传。构建目录应位于目标工作盘，尽量使用 D 盘；如果软件必须写 C 盘或从 D 盘还需指回 C 盘，则直接使用 C 盘。
 
 已有便携版正在使用时，可加 `--output-dir dist/preview` 构建到另一个项目内目录，保留旧程序和数据。不要在使用中的目录内覆盖构建。
 

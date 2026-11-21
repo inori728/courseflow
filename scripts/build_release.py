@@ -84,7 +84,7 @@ def public_data_arguments(root):
     from courseflow.backgrounds import BACKGROUNDS
 
     data = root / "courseflow" / "data"
-    names = ["README.md", "availability.html", "示例课表.yaml", "icon.png", "icon.ico"]
+    names = ["README.md", "availability.html", "assistant-guide.md", "示例课表.yaml", "icon.png", "icon.ico"]
     names.extend(f"wallpaper-{preset}-{layout}.png" for preset in BACKGROUNDS for layout in ("desktop", "phone"))
     names.extend(sorted(path.name for path in data.glob("holidays-*.json") if re.fullmatch(r"holidays-[0-9]{4}\.json", path.name)))
     return [item for name in names for item in ("--add-data", f"{data / name}:courseflow/data")]

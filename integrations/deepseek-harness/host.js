@@ -15,7 +15,8 @@ const binding = readBinding()
 const backend = process.env.COURSEFLOW_BACKEND || binding.backend
 const home = process.env.COURSEFLOW_HOME || binding.dataDir || join(dev, 'user-data')
 const workbenchOps = new Set(['preview', 'commit', 'undo', 'semester_week', 'save_semester_week', 'wallpaper_background_preview',
-  'group_search', 'group_refresh', 'activity', 'activity_preview', 'activity_clocks', 'point_grid', 'todos', 'todo_reserve', 'schedule'])
+  'group_search', 'group_refresh', 'activity', 'activity_preview', 'activity_clocks', 'point_grid', 'todos', 'todo_reserve',
+  'schedule', 'assistant_choose'])
 const tableFiles = new Set(['.yaml', '.yml', '.csv', '.xlsx', '.docx', '.pdf', '.busycard', '.txt'])
 const imageSuffixes = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp', 'image/gif': '.gif' }
 const objectSchema = { type: 'object', additionalProperties: true }
@@ -194,8 +195,12 @@ class CourseFlowService extends TypertRemoteService {
       }
       if (action === 'download') return { ok: true, value: await exportFile(payload.id) }
       if (action === 'status') return this.status(payload)
-      if (action === 'settings' || action === 'save_settings') {
+      if (action === 'settings' || action === 'save_settings' || action === 'guide') {
         return this.call(action, payload, invocation.signal)
+      }
+      if (action === 'assistant') {
+        const { text, mode, history, files } = payload
+        return this.inSession(action, { text, mode, history, files: browserFiles(files) }, session, invocation.signal)
       }
       if (action === 'request') {
         const { mode, text = '', week, formats, include_self, files, wallpaper, shortcodes, member_order, search_now } = payload
@@ -222,8 +227,13 @@ class CourseFlowService extends TypertRemoteService {
     const pending = current.queue.then(async () => {
       let fields = payload
       const work = current.workbench
-      if (action === 'request') {
+      if (action === 'request' || action === 'assistant') {
         fields = { ...payload, group_token: current.group, schedule_token: current.schedule, workbench: work }
+      } else if (action === 'assistant_choose') {
+        if ((payload.group_token && payload.group_token !== current.group) ||
+            (payload.review && payload.review.token !== work.group_prepare)) {
+          return { ok: false, error: '组队资料已更新, 请使用最新的核对结果.' }
+        }
       } else if (action === 'activity_preview' || action === 'todo_reserve') {
         fields = { ...payload, group_token: payload.group_token || current.group }
       } else if (action === 'schedule') {
@@ -237,15 +247,17 @@ class CourseFlowService extends TypertRemoteService {
       }
       const response = await this.call(action, fields, signal)
       if (response.ok) {
-        const value = response.value
+        const reply = response.value
+        const value = reply.type === 'assistant' ? reply.result : reply
+        if (!value) return response
         if (value.type === 'prepare') {
           work.prepared = value.token
           work.confirmation = null
           work.candidates = []
         }
         if (value.type === 'preview') {
-          work.prepared = value.token
-          work.confirmation = value.confirmation || null
+          work.prepared = value.write_label ? null : value.token
+          work.confirmation = value.write_label ? null : (value.confirmation || null)
           work.candidates = (value.candidates || []).map(item => item.id)
         }
         if (value.type === 'semester_week') {
@@ -253,7 +265,15 @@ class CourseFlowService extends TypertRemoteService {
           work.suggested_week = value.suggested_week ?? null
         }
         if (value.type === 'agenda' && Number.isInteger(value.week)) work.agenda_week = value.week
-        if (value.type === 'group_prepare') work.group_prepare = value.token
+        if (value.type === 'group_prepare') {
+          work.group_prepare = value.token
+          if (action === 'assistant') {
+            current.group = null
+            current.schedule = null
+            work.activity = null
+            work.todo_id = null
+          }
+        }
         if (value.type === 'group_result') {
           current.group = value.token
           work.activity = null

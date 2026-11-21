@@ -15,6 +15,7 @@ from .weeks import _number
 _NUM = r"[0-9零〇一二两三四五六七八九十百]+"
 _DAY = r"(?:周|星期)[一二三四五六日天]"
 _WEEK = rf"第\s*({_NUM})\s*周"
+_RELATIVE_WEEK = re.compile(r"(下下|下|上|本|这)\s*(?:一\s*)?(?:个\s*)?(?:周|星期|礼拜)")
 _PERIOD = rf"第?\s*({_NUM})(?:\s*[-~至到]\s*({_NUM}))?\s*(大节|小节|节)"
 SHORTCODE = r"CF1\.[A-Za-z0-9_-]+\.[0-9a-fA-F]{8}"
 
@@ -72,14 +73,27 @@ def formats_for(text):
     return names
 
 
-def week_for(text, timetable, *, default_delta=0):
+def week_reference(text):
+    """Extract the calendar reference from a request to query a week."""
+    text = unicodedata.normalize("NFKC", text)
     explicit = re.search(_WEEK, text)
+    if explicit:
+        return explicit[0]
+    relative = _RELATIVE_WEEK.search(text)
+    if relative:
+        return ("本" if relative[1] == "这" else relative[1]) + "周"
+    return ""
+
+
+def week_for(text, timetable, *, default_delta=0, today=None):
+    reference = week_reference(text)
+    explicit = re.fullmatch(_WEEK, reference)
     if explicit:
         week = _number(explicit[1])
     else:
         calendar = SemesterCalendar.from_timetable(timetable)
-        today = local_today(timetable)
-        delta = 2 if "下下周" in text else 1 if "下周" in text else -1 if "上周" in text else default_delta
+        today = today or local_today(timetable)
+        delta = {"上周": -1, "本周": 0, "下周": 1, "下下周": 2}.get(reference, default_delta)
         week = (today - calendar.start).days // 7 + 1 + delta
     if week is None or not 1 <= week <= timetable.weeks_total:
         raise ValueError("所查询周次不在学期内, 请明确写出第几周.")

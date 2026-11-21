@@ -58,7 +58,7 @@ def main():
     data = ROOT / "courseflow" / "data"
     wallpapers = [f"wallpaper-{preset}-{layout}.png" for preset in ("dusk", "night", "sea", "purple")
                   for layout in ("desktop", "phone")]
-    for name in ("示例课表.yaml", "holidays-2026.json", "availability.html", "icon.png", "icon.ico", *wallpapers):
+    for name in ("示例课表.yaml", "holidays-2026.json", "availability.html", "assistant-guide.md", "icon.png", "icon.ico", *wallpapers):
         if not (data / name).is_file():
             errors.append(f"missing bundled resource: {name}")
     if (ROOT / "docs" / "index.html").read_bytes() != (data / "availability.html").read_bytes():

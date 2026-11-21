@@ -32,7 +32,8 @@ def self_check(source, target):
         timetable = service.load_timetable(sample)
         application = CourseFlowApp(source or sample)
         application.withdraw()
-        for page in ("import", "review", "export", "group"):
+        pages = ("review", "assistant", "common", "import", "adjust", "group", "schedule", "todos", "export")
+        for page in pages:
             application.go(page)
             application.update_idletasks()
         application.go("review")
@@ -52,7 +53,7 @@ def self_check(source, target):
             "point_grid_export": True,
             "in_app_week_calendar": True,
             "window": application.winfo_exists() == 1,
-            "pages": ["import", "review", "export", "group"],
+            "pages": list(pages),
             "ctypes_ssl_decimal": True, "excel_roundtrip": True,
             "pdf_import_available": True, "render_size": image.size,
             "group_windows": len(group.windows), "status": "passed",
